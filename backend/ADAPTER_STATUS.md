@@ -2,15 +2,20 @@
 
 ## Current Implementation: Direct SDK Adapters
 
-### Status: ✅ Production Ready (Final Architecture)
+### Status: ⚠️ Grounding Implementation Required
 
 We're using **direct SDK adapters** as the permanent solution:
 
-- **OpenAI Adapter**: Direct OpenAI SDK (`AsyncOpenAI`)
-- **Vertex AI Adapter**: Direct Vertex AI SDK (`vertexai.generative_models`)
+- **OpenAI Adapter**: Direct OpenAI SDK (`AsyncOpenAI`) - **Missing grounding**
+- **Vertex AI Adapter**: Direct Vertex AI SDK (`vertexai.generative_models`) - **Missing grounding**
 - **Unified Router**: Clean routing logic without framework overhead
 - **No LangChain**: Deliberately avoided for simplicity
 - **No LangSmith**: Not needed - we have our own observability
+
+### Critical Gap: Grounding Not Implemented
+- Adapters accept `grounded` flag but don't actually enable web search
+- `grounded_effective` mirrors request instead of detecting actual grounding
+- Must implement per GROUNDING_IMPLEMENTATION_FINAL.md
 
 ### Architecture Decision: Direct Adapters
 
