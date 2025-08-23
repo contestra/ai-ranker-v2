@@ -109,9 +109,11 @@ frontend/
 - Basic FastAPI app
 - **Vertex AI integration with ADC/WIF**
 - **Vendor routing (no silent fallbacks)**
+- **Direct SDK adapters (OpenAI, Vertex AI)**
 - **Preflight endpoint for credential verification**
 - **Model normalization and text extraction helpers**
 - **Comprehensive error handling**
+- **ALS infrastructure (ready but not active)**
 
 ### 🚧 In Progress
 - [ ] Canonicalization rules (§5)
@@ -124,6 +126,12 @@ frontend/
 - [ ] Gemini two-step for JSON
 - [ ] ALS determinism with seed keys
 - [ ] Grounding detection logic
+
+### 📋 Planned Upgrades
+- [ ] **LangChain Integration** - Replace direct SDK adapters
+- [ ] **LangSmith Observability** - Add tracing and monitoring
+- [ ] **Prompt Templates** - Unified template management
+- [ ] **Streaming Support** - Real-time response streaming
 
 ## Key Endpoints
 
