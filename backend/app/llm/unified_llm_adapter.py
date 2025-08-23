@@ -6,6 +6,7 @@ Routes requests to appropriate provider and handles ALS, telemetry
 import hashlib
 import json
 import logging
+import os
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,6 +20,10 @@ from app.core.config import get_settings
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
+
+# Timeout configuration
+UNGROUNDED_TIMEOUT = int(os.getenv("LLM_TIMEOUT_UN", "60"))
+GROUNDED_TIMEOUT = int(os.getenv("LLM_TIMEOUT_GR", "120"))
 
 
 class UnifiedLLMAdapter:
@@ -57,18 +62,28 @@ class UnifiedLLMAdapter:
         if request.als_context:
             request = self._apply_als(request)
         
-        # Step 2: Route to appropriate adapter - fail closed, no silent fallbacks
+        # Step 2: Infer vendor if missing
+        if not request.vendor:
+            request.vendor = self.get_vendor_for_model(request.model)
+            if not request.vendor:
+                raise ValueError(f"Cannot infer vendor for model: {request.model}")
+        
+        # Step 3: Validate vendor
         if request.vendor not in ("openai", "vertex"):
             raise ValueError(f"Unsupported vendor: {request.vendor}")
         
+        # Step 4: Calculate timeout based on grounding
+        timeout = GROUNDED_TIMEOUT if request.grounded else UNGROUNDED_TIMEOUT
+        
         logger.info(f"Routing LLM request: vendor={request.vendor}, model={request.model}, "
+                   f"grounded={request.grounded}, timeout={timeout}s, "
                    f"template_id={request.template_id}, run_id={request.run_id}")
         
         try:
             if request.vendor == "openai":
-                response = await self.openai_adapter.complete(request)
+                response = await self.openai_adapter.complete(request, timeout=timeout)
             else:  # vertex - NO SILENT FALLBACKS, auth errors should surface
-                response = await self.vertex_adapter.complete(request)
+                response = await self.vertex_adapter.complete(request, timeout=timeout)
         except Exception as e:
             # Convert adapter exceptions to LLM response format
             error_msg = str(e)
@@ -136,10 +151,19 @@ class UnifiedLLMAdapter:
     ):
         """Emit telemetry row to database"""
         try:
+            # Log grounding telemetry
+            if request.grounded:
+                logger.info(
+                    "Grounding telemetry: requested=%s effective=%s vendor=%s model=%s",
+                    request.grounded, response.grounded_effective, 
+                    request.vendor, request.model
+                )
+            
             telemetry = LLMTelemetry(
                 vendor=request.vendor,
                 model=request.model,
                 grounded=request.grounded,
+                grounded_effective=response.grounded_effective,
                 json_mode=request.json_mode,
                 latency_ms=response.latency_ms,
                 prompt_tokens=response.usage.get('prompt_tokens', 0),

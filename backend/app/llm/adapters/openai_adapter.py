@@ -202,10 +202,48 @@ class OpenAIAdapter:
         raw_allow = os.getenv("OPENAI_MODELS_ALLOWLIST", "gpt-5").split(",")
         self.allowlist = {m.strip() for m in raw_allow if m.strip()}
     
-    async def complete(self, request: LLMRequest) -> LLMResponse:
+    def _detect_grounding(self, response) -> tuple[bool, int]:
+        """
+        Check if web search was actually used
+        
+        Returns:
+            (grounded_effective, tool_call_count)
+        """
+        tool_calls = 0
+        grounded = False
+        
+        # Check output items for tool usage
+        if hasattr(response, 'output'):
+            output = response.output
+        elif hasattr(response, 'model_dump'):
+            output = response.model_dump().get('output', [])
+        else:
+            output = []
+        
+        for item in output:
+            if isinstance(item, dict):
+                item_type = item.get('type', '')
+            else:
+                item_type = getattr(item, 'type', '')
+            
+            # Check for tool-related types
+            if item_type in ('tool_use', 'tool_result', 'web_search_result', 'web_search'):
+                tool_calls += 1
+                grounded = True
+            elif 'tool' in item_type.lower() or 'search' in item_type.lower():
+                tool_calls += 1
+                grounded = True
+        
+        return grounded, tool_calls
+    
+    async def complete(self, request: LLMRequest, timeout: int = 60) -> LLMResponse:
         """
         Execute OpenAI API call with GPT-5 specific requirements.
         Uses Responses API with adaptive error handling and retry logic.
+        
+        Args:
+            request: LLM request
+            timeout: Timeout in seconds (60 for ungrounded, 120 for grounded)
         """
         # Enforce model allowlist
         if request.model not in self.allowlist:
@@ -234,9 +272,18 @@ class OpenAIAdapter:
         if instructions:
             params["instructions"] = instructions
         
+        # Add grounding tools if requested
+        grounded_effective = False
+        tool_call_count = 0
+        if request.grounded:
+            tool_type = os.getenv("OPENAI_GROUNDING_TOOL", "web_search")
+            params["tools"] = [{"type": tool_type}]
+            params["tool_choice"] = os.getenv("OPENAI_TOOL_CHOICE", "auto")
+        
         # GPT-5 specific parameters
         if request.model == "gpt-5":
-            params["temperature"] = 1.0  # MANDATORY for GPT-5
+            # MANDATORY: temperature=1.0 for GPT-5, especially with tools
+            params["temperature"] = 1.0
         else:
             if request.temperature is not None:
                 params["temperature"] = request.temperature
@@ -258,10 +305,12 @@ class OpenAIAdapter:
             "temperature_used": params.get("temperature"),
         }
         
-        # Internal call function with error handling
+        # Internal call function with error handling and timeout
         async def _call(call_params):
             try:
-                return await self.client.responses.create(
+                # Apply timeout to the client
+                client_with_timeout = self.client.with_options(timeout=timeout)
+                return await client_with_timeout.responses.create(
                     **{k: v for k, v in call_params.items() if v is not None}
                 )
             except Exception as e:
@@ -285,6 +334,10 @@ class OpenAIAdapter:
         # First attempt
         response = await _call(params)
         content = _extract_text_from_responses_obj(response)
+        
+        # Detect grounding if tools were used
+        if request.grounded:
+            grounded_effective, tool_call_count = self._detect_grounding(response)
         
         # Check if initial response had reasoning only
         if _had_reasoning_only(response):
@@ -354,6 +407,29 @@ class OpenAIAdapter:
                     "total_tokens": getattr(resp_usage, 'total_tokens', 0),
                 }
         
+        # Fallback text extraction for grounded empty responses
+        if not content and request.grounded:
+            # Try top-level text field
+            if hasattr(response, 'text'):
+                content = (getattr(response, 'text', '') or '').strip()
+            
+            # Try model_dump for dict access
+            if not content and hasattr(response, 'model_dump'):
+                response_data = response.model_dump()
+                content = (response_data.get('text', '') or '').strip()
+                
+                # Try reasoning summaries
+                if not content:
+                    for item in response_data.get('output', []) or []:
+                        if item.get('type') == 'reasoning':
+                            summary = item.get('summary', [])
+                            if summary:
+                                content = ' '.join(s for s in summary if s).strip()
+                                break
+            
+            if content:
+                metadata['grounding_extraction_fallback'] = True
+        
         # Get system fingerprint
         sys_fp = getattr(response, "system_fingerprint", None)
         
@@ -364,12 +440,20 @@ class OpenAIAdapter:
         metadata["had_text_after_retry"] = not _is_empty(content)
         metadata["response_format"] = params.get("response_format")
         
+        # Debug logging for grounding
+        if request.grounded:
+            logger.info(
+                "OpenAI Grounding: requested=%s effective=%s tool_calls=%s fallback=%s",
+                request.grounded, grounded_effective, tool_call_count,
+                bool(metadata.get('grounding_extraction_fallback'))
+            )
+        
         # Build response
         return LLMResponse(
             content=content,
             model_version=getattr(response, 'model', request.model),
             model_fingerprint=sys_fp,
-            grounded_effective=request.grounded if request.grounded else False,
+            grounded_effective=grounded_effective,
             usage=usage,
             latency_ms=latency_ms,
             raw_response=response.model_dump() if hasattr(response, 'model_dump') else None,

@@ -33,12 +33,16 @@
       "Bash(python -m pytest tests/test_ops_vertex_preflight.py -v)",
       "Bash(python -m pytest tests/test_vendor_routing.py -v)",
       "Bash(API_BASE=http://127.0.0.1:8000 ORG=test-org TEMPLATE_ID=fed2bee8-8751-4801-9cbd-e93d68cb215b ./scripts/smoke_vertex.sh)",
-      "Bash(gcloud auth:*)"
+      "Bash(gcloud auth:*)",
+      "Bash(python tests/test_vertex_grounding.py)",
+      "Bash(export GOOGLE_CLOUD_PROJECT=contestra-ai)",
+      "Bash(export VERTEX_LOCATION=europe-west4)"
     ],
     "deny": [],
     "ask": [],
     "additionalDirectories": [
-      "/home/leedr/.config"
+      "/home/leedr/.config",
+      "/mnt/d/OneDrive/CONTESTRA/Microapps/ai-ranker-adapters"
     ]
   }
 }

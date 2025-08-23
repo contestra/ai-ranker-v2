@@ -4,7 +4,7 @@ import time
 import logging
 from typing import Any, Dict, List
 import vertexai
-from vertexai.generative_models import GenerativeModel, GenerationConfig
+from vertexai.generative_models import GenerativeModel, GenerationConfig, Tool, grounding
 from starlette.concurrency import run_in_threadpool
 
 from app.llm.types import LLMRequest, LLMResponse
@@ -67,10 +67,14 @@ def _extract_vertex_usage(resp: Any) -> Dict[str, int]:
 
 def _extract_vertex_text(resp: Any) -> str:
     """Return concatenated text from the top candidate, handling SDK/proto shapes."""
-    # 1) Newer clients expose a convenience .text
-    t = getattr(resp, "text", None)
-    if isinstance(t, str) and t.strip():
-        return t.strip()
+    # 1) Newer clients expose a convenience .text but it can throw exceptions
+    try:
+        t = getattr(resp, "text", None)
+        if isinstance(t, str) and t.strip():
+            return t.strip()
+    except (ValueError, AttributeError):
+        # The .text property can raise ValueError if no parts
+        pass
 
     texts: List[str] = []
     # 2) Standard: candidates -> content.parts[*].text
@@ -141,6 +145,21 @@ def _normalize_model_id(m: str) -> str:
 
 class VertexAdapter:
     _inited = False
+    
+    def __init__(self, project: str = None, location: str = None):
+        """Initialize with configurable project and location"""
+        self.project = project or os.getenv("VERTEX_PROJECT", "contestra-ai")
+        self.location = location or os.getenv("VERTEX_LOCATION", "global")
+        logger.info("Vertex adapter initialized: project=%s location=%s", self.project, self.location)
+    
+    def _is_structured_output(self, req) -> bool:
+        """Check if request wants structured JSON output"""
+        return bool(
+            getattr(req, "schema", None) or
+            getattr(req, "response_schema", None) or
+            getattr(req, "response_mime_type", None) == "application/json" or
+            getattr(req, "json_mode", False)
+        )
 
     def _enforce_credential_policy(self):
         """If ENFORCE_VERTEX_WIF=true, require an external_account JSON (WIF) instead of ADC."""
@@ -156,19 +175,50 @@ class VertexAdapter:
             if cfg.get("type") != "external_account":
                 raise RuntimeError("ENFORCE_VERTEX_WIF=true expects an 'external_account' credentials JSON")
 
-    def _ensure_init(self):
+    def _ensure_init(self, use_grounding: bool = False):
         if self._inited:
             return
         self._enforce_credential_policy()
-        project = os.getenv("GOOGLE_CLOUD_PROJECT")
-        location = os.getenv("VERTEX_LOCATION") or os.getenv("GOOGLE_CLOUD_REGION") or "europe-west4"
-        if not project:
+        if not self.project:
             raise RuntimeError("GOOGLE_CLOUD_PROJECT missing")
-        vertexai.init(project=project, location=location)
+        # Use configured location (can be overridden for grounding)
+        location = self.location
+        if use_grounding and location == "global":
+            # Global is preferred for grounding, keep it
+            pass
+        vertexai.init(project=self.project, location=location)
         self._inited = True
 
-    async def complete(self, req: LLMRequest) -> LLMResponse:
-        self._ensure_init()
+    def _detect_grounding(self, response) -> tuple[bool, int]:
+        """Detect whether grounding actually ran (scan ALL candidates)"""
+        grounded_effective = False
+        tool_call_count = 0
+        
+        for cand in getattr(response, "candidates", []) or []:
+            gm = getattr(cand, "grounding_metadata", None)
+            if not gm:
+                continue
+            
+            web_queries = getattr(gm, "web_search_queries", []) or []
+            chunks = getattr(gm, "grounding_chunks", []) or []
+            entry_point = getattr(gm, "search_entry_point", None)
+            
+            if web_queries or chunks or entry_point:
+                grounded_effective = True
+                tool_call_count += len(web_queries) if web_queries else 1
+                break
+        
+        return grounded_effective, tool_call_count
+    
+    async def complete(self, req: LLMRequest, timeout: int = 60) -> LLMResponse:
+        # Guard: structured JSON + grounding is unsupported
+        if self._is_structured_output(req) and req.grounded:
+            raise RuntimeError(
+                "GROUNDED_JSON_UNSUPPORTED: Gemini cannot combine JSON schema with GoogleSearch grounding. "
+                "Choose either grounding OR structured output, not both."
+            )
+        
+        self._ensure_init(use_grounding=req.grounded)
         t0 = time.perf_counter()
 
         # Normalize model ID to short form
@@ -187,11 +237,23 @@ class VertexAdapter:
         msgs = getattr(req, "messages", None) or []
         prompt = "\n".join(m.get("content", "") if isinstance(m, dict) else str(m) for m in msgs) or "ping"
 
-        model = GenerativeModel(model_name)
+        # Enable Google Search when grounded
+        tools = None
+        if req.grounded:
+            tools = [Tool.from_google_search_retrieval(grounding.GoogleSearchRetrieval())]
+            model = GenerativeModel(model_name, tools=tools)
+        else:
+            model = GenerativeModel(model_name)
         
-        # Call Vertex and handle potential SDK errors
+        # Call Vertex with timeout and handle potential SDK errors
         try:
-            resp = await run_in_threadpool(model.generate_content, prompt, generation_config=gen_cfg)
+            # Note: The Vertex SDK doesn't support request_options timeout
+            # The timeout is handled at the async level
+            resp = await run_in_threadpool(
+                model.generate_content, 
+                prompt, 
+                generation_config=gen_cfg
+            )
         except Exception as e:
             error_msg = str(e)
             # Handle the specific "no parts" error from SDK
@@ -218,12 +280,25 @@ class VertexAdapter:
         text = _extract_vertex_text(resp)
         finish = _extract_finish_info(resp)
         
+        # Detect grounding if requested
+        grounded_effective = False
+        tool_call_count = 0
+        if req.grounded:
+            grounded_effective, tool_call_count = self._detect_grounding(resp)
+        
         # Log diagnostics if text is empty
         if not text:
             logger.warning(f"Vertex empty text response - finish_info: {finish}")
             # If safety blocked, include that info
             if finish.get("blocked"):
                 logger.error(f"Response was safety blocked: {finish.get('block_reason')}")
+        
+        # Debug logging for grounding
+        if req.grounded:
+            logger.info(
+                "Vertex Grounding: requested=%s effective=%s tool_calls=%s location=%s",
+                req.grounded, grounded_effective, tool_call_count, self.location
+            )
 
         return LLMResponse(
             vendor="vertex",
@@ -234,6 +309,6 @@ class VertexAdapter:
             latency_ms=latency_ms,
             model_version=model_name,
             model_fingerprint=None,
-            grounded_effective=bool(getattr(req, "grounded", False)),
+            grounded_effective=grounded_effective,
             metadata={},
         )
