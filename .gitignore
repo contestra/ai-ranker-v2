@@ -11,8 +11,20 @@ env/
 
 # Environment
 .env
-.env.local
 .env.*.local
+.env.development
+
+# Local-only env
+/backend/.env.local
+
+# If anyone ever copies keys into the repo (avoid doing this):
+/backend/sa_keys/
+/**/vertex-dev.json
+
+# NEVER include production secrets
+*.key
+*.pem
+*.crt
 
 # Database
 *.db

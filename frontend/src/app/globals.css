@@ -1,0 +1,111 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Contestra Brand System */
+@layer base {
+  /* Import Suisse fonts if available */
+  @font-face {
+    font-family: 'Suisse Screen';
+    src: local('Suisse Screen'), local('SuisseScreen');
+    font-weight: 400 500 600;
+    font-display: swap;
+  }
+  
+  @font-face {
+    font-family: 'Suisse Intl';
+    src: local('Suisse Intl'), local('SuisseIntl');
+    font-weight: 400 500;
+    font-display: swap;
+  }
+  
+  @font-face {
+    font-family: 'Suisse Intl Mono';
+    src: local('Suisse Intl Mono'), local('SuisseIntlMono');
+    font-weight: 400;
+    font-display: swap;
+  }
+  
+  /* Base typography */
+  body {
+    @apply font-body text-contestra-dark;
+  }
+  
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-display;
+  }
+}
+
+@layer components {
+  /* Contestra Button System */
+  .btn-contestra {
+    @apply font-mono inline-flex items-center px-[2.2rem] py-2 rounded-[50px] 
+           text-sm font-normal transition-all duration-300 ease-out
+           border border-black/[0.06] cursor-pointer whitespace-nowrap
+           tracking-[0.02em] leading-[1.4] origin-center;
+  }
+  
+  .btn-contestra-primary {
+    @apply btn-contestra bg-contestra-blue text-white shadow-contestra-md
+           hover:shadow-contestra-lg hover:opacity-90;
+  }
+  
+  .btn-contestra-gradient {
+    @apply btn-contestra bg-spectrum text-white relative z-[1];
+  }
+  
+  .btn-contestra-gradient::before {
+    content: '';
+    @apply absolute inset-0 bg-white rounded-[50px] opacity-0
+           transition-opacity duration-300 -z-[1];
+  }
+  
+  .btn-contestra-gradient:hover::before {
+    @apply opacity-10;
+  }
+  
+  /* Form Field Labels with Suisse Mono */
+  .field-label {
+    @apply font-mono text-xs uppercase tracking-[0.02em] text-contestra-text-meta
+           mb-1.5 block;
+  }
+  
+  /* Form Inputs with Contestra styling */
+  .input-contestra {
+    @apply w-full px-4 py-3 rounded-lg border border-black/[0.06] 
+           bg-white text-contestra-dark font-body
+           transition-all duration-200 ease-out
+           focus:outline-none focus:border-contestra-accent/50 
+           focus:shadow-[0_0_0_3px_rgba(255,0,136,0.1)];
+  }
+  
+  /* Card with gradient on hover */
+  .card-contestra {
+    @apply bg-white rounded-2xl border border-black/[0.06] 
+           transition-all duration-300 ease-out relative overflow-hidden;
+  }
+  
+  .card-contestra::before {
+    content: '';
+    @apply absolute top-0 left-0 right-0 h-1 bg-spectrum-90 
+           -translate-x-full transition-transform duration-300;
+  }
+  
+  .card-contestra:hover {
+    @apply shadow-contestra-xl bg-gradient-to-br from-white to-contestra-gray-100;
+  }
+  
+  .card-contestra:hover::before {
+    @apply translate-x-0;
+  }
+  
+  /* Subtle gradient backgrounds */
+  .bg-spectrum-subtle {
+    background: linear-gradient(to right, #f9ffff 0%, #f9fffc 20%, #fcfff9 35%, #fffff9 50%, #fffcf9 65%, #fff9fc 80%, #fff9fa 100%);
+  }
+  
+  /* Text gradient effect */
+  .text-gradient-spectrum {
+    @apply bg-spectrum bg-clip-text text-transparent;
+  }
+}

@@ -8,7 +8,9 @@ import httpx
 import json
 from typing import Dict, List, Set
 from datetime import datetime
-from app.config import settings
+from app.core.config import get_settings
+
+settings = get_settings()
 
 class ALSHarvester:
     """

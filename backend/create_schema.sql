@@ -6,6 +6,7 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
 -- Drop existing tables (for clean setup)
+DROP TABLE IF EXISTS llm_telemetry CASCADE;
 DROP TABLE IF EXISTS runs CASCADE;
 DROP TABLE IF EXISTS batches CASCADE;
 DROP TABLE IF EXISTS prompt_templates CASCADE;
@@ -104,12 +105,33 @@ CREATE TABLE idempotency_keys (
     PRIMARY KEY (org_id, key)
 );
 
+-- LLM Telemetry table
+CREATE TABLE llm_telemetry (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    vendor VARCHAR(50) NOT NULL,
+    model VARCHAR(100) NOT NULL,
+    grounded BOOLEAN NOT NULL DEFAULT FALSE,
+    json_mode BOOLEAN NOT NULL DEFAULT FALSE,
+    latency_ms INTEGER,
+    prompt_tokens INTEGER,
+    completion_tokens INTEGER,
+    total_tokens INTEGER,
+    success BOOLEAN NOT NULL DEFAULT TRUE,
+    error_type VARCHAR(100),
+    template_id UUID,
+    run_id VARCHAR(255),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Indexes
 CREATE INDEX idx_template_runs ON runs(template_id, created_at DESC);
 CREATE INDEX idx_output_hash ON runs(response_output_sha256);
 CREATE INDEX idx_batch_status ON batches(status, created_at DESC);
 CREATE INDEX idx_batch_runs ON runs(batch_id, batch_run_index);
 CREATE INDEX idx_idempotency_expires ON idempotency_keys(expires_at);
+CREATE INDEX idx_llm_telemetry_vendor_model ON llm_telemetry(vendor, model);
+CREATE INDEX idx_llm_telemetry_created_at ON llm_telemetry(created_at);
+CREATE INDEX idx_llm_telemetry_template_id ON llm_telemetry(template_id);
 
 -- Insert countries
 INSERT INTO countries (code, name, emoji, vat_rate, plug_types, emergency_numbers, locale_code) VALUES
