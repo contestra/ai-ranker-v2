@@ -127,11 +127,11 @@ frontend/
 - [ ] ALS determinism with seed keys
 - [ ] Grounding detection logic
 
-### 📋 Planned Upgrades
-- [ ] **LangChain Integration** - Replace direct SDK adapters
-- [ ] **LangSmith Observability** - Add tracing and monitoring
-- [ ] **Prompt Templates** - Unified template management
-- [ ] **Streaming Support** - Real-time response streaming
+### 📋 Architecture Decisions
+- ✅ **Direct SDK Adapters** - Clean, simple, performant (no LangChain)
+- ✅ **Built-in Observability** - Custom telemetry (no LangSmith)
+- ✅ **Native Streaming** - SDK streaming support when needed
+- ✅ **Minimal Dependencies** - Only essential packages
 
 ## Key Endpoints
 
