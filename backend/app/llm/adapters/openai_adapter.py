@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional
 from openai import AsyncOpenAI
 
 from app.llm.types import LLMRequest, LLMResponse
+from .grounding_detection_helpers import detect_openai_grounding
 
 # Provider minimum output tokens requirement
 PROVIDER_MIN_OUTPUT_TOKENS = 16
@@ -50,10 +51,19 @@ def _extract_text_from_responses_obj(r) -> str:
             item_type = getattr(item, "type", None)
             if item_type == "reasoning":
                 continue
+            
+            # Handle message items which contain the actual text
+            if item_type != "message":
+                continue
                 
             content = getattr(item, "content", None)
             if isinstance(content, list):
                 for blk in content:
+                    # Check block type - we want output_text or redacted_text blocks
+                    blk_type = getattr(blk, "type", None) or (blk.get("type") if isinstance(blk, dict) else None)
+                    if blk_type not in {None, "text", "output_text", "redacted_text"}:
+                        continue
+                    
                     # typed class: blk.text or blk.text.value
                     t = getattr(blk, "text", None)
                     if isinstance(t, str) and t.strip():
@@ -89,7 +99,7 @@ def _extract_text_from_responses_obj(r) -> str:
                 # Handle message items explicitly
                 if item.get("type") == "message":
                     for blk in item.get("content", []):
-                        if blk.get("type") in {"text", "output_text"}:
+                        if blk.get("type") in {"text", "output_text", "redacted_text"}:
                             t = blk.get("text")
                             if isinstance(t, str) and t.strip():
                                 collected.append(t)
@@ -204,37 +214,10 @@ class OpenAIAdapter:
     
     def _detect_grounding(self, response) -> tuple[bool, int]:
         """
-        Check if web search was actually used
-        
-        Returns:
-            (grounded_effective, tool_call_count)
+        Detect web search usage in Responses API output.
+        Delegates to helper for testability.
         """
-        tool_calls = 0
-        grounded = False
-        
-        # Check output items for tool usage
-        if hasattr(response, 'output'):
-            output = response.output
-        elif hasattr(response, 'model_dump'):
-            output = response.model_dump().get('output', [])
-        else:
-            output = []
-        
-        for item in output:
-            if isinstance(item, dict):
-                item_type = item.get('type', '')
-            else:
-                item_type = getattr(item, 'type', '')
-            
-            # Check for tool-related types
-            if item_type in ('tool_use', 'tool_result', 'web_search_result', 'web_search'):
-                tool_calls += 1
-                grounded = True
-            elif 'tool' in item_type.lower() or 'search' in item_type.lower():
-                tool_calls += 1
-                grounded = True
-        
-        return grounded, tool_calls
+        return detect_openai_grounding(response)
     
     async def complete(self, request: LLMRequest, timeout: int = 60) -> LLMResponse:
         """
@@ -255,8 +238,8 @@ class OpenAIAdapter:
         instructions, user_input = _split_messages(request.messages)
         
         # Token configuration with environment defaults
-        DEFAULT_MAX = int(os.getenv("OPENAI_DEFAULT_MAX_OUTPUT_TOKENS", "512"))
-        CAP = int(os.getenv("OPENAI_MAX_OUTPUT_TOKENS_CAP", "4000"))
+        DEFAULT_MAX = int(os.getenv("OPENAI_DEFAULT_MAX_OUTPUT_TOKENS", "6000"))
+        CAP = int(os.getenv("OPENAI_MAX_OUTPUT_TOKENS_CAP", "6000"))
         
         requested_tokens = request.max_tokens or DEFAULT_MAX
         effective_tokens = max(PROVIDER_MIN_OUTPUT_TOKENS, min(CAP, requested_tokens))
@@ -279,6 +262,16 @@ class OpenAIAdapter:
             tool_type = os.getenv("OPENAI_GROUNDING_TOOL", "web_search")
             params["tools"] = [{"type": tool_type}]
             params["tool_choice"] = os.getenv("OPENAI_TOOL_CHOICE", "auto")
+            
+            # Add guardrail instruction to ensure final message after tools
+            grounding_instruction = (
+                "After finishing any tool calls, you MUST produce a final assistant message "
+                "containing the answer in plain text. Limit yourself to 2-3 web searches before answering."
+            )
+            if instructions:
+                params["instructions"] = f"{instructions}\n\n{grounding_instruction}"
+            else:
+                params["instructions"] = grounding_instruction
         
         # GPT-5 specific parameters
         if request.model == "gpt-5":
@@ -407,28 +400,81 @@ class OpenAIAdapter:
                     "total_tokens": getattr(resp_usage, 'total_tokens', 0),
                 }
         
-        # Fallback text extraction for grounded empty responses
+        # Enhanced fallback for grounded empty responses
         if not content and request.grounded:
-            # Try top-level text field
-            if hasattr(response, 'text'):
-                content = (getattr(response, 'text', '') or '').strip()
-            
-            # Try model_dump for dict access
-            if not content and hasattr(response, 'model_dump'):
+            # NEVER access response.text - it's a config object, not content!
+            # Try model_dump for additional extraction paths
+            if hasattr(response, 'model_dump'):
                 response_data = response.model_dump()
-                content = (response_data.get('text', '') or '').strip()
                 
-                # Try reasoning summaries
+                # Try output_text from dict (backup to typed access)
+                if not content:
+                    output_text = response_data.get('output_text', '')
+                    if isinstance(output_text, str) and output_text.strip():
+                        content = output_text.strip()
+                        metadata['extraction_path'] = 'output_text_dict'
+                
+                # Try message blocks from output array
                 if not content:
                     for item in response_data.get('output', []) or []:
-                        if item.get('type') == 'reasoning':
-                            summary = item.get('summary', [])
-                            if summary:
-                                content = ' '.join(s for s in summary if s).strip()
+                        if item.get('type') == 'message':
+                            # Extract from content blocks
+                            item_content = item.get('content', [])
+                            if isinstance(item_content, list):
+                                for block in item_content:
+                                    if isinstance(block, dict) and block.get('type') in {'output_text', 'redacted_text'}:
+                                        text = block.get('text', '')
+                                        if isinstance(text, str):
+                                            content = text.strip()
+                                            metadata['extraction_path'] = 'message_blocks'
+                                            break
+                            if content:
                                 break
             
             if content:
                 metadata['grounding_extraction_fallback'] = True
+            else:
+                # Log extraction failure for debugging
+                logger.warning("Failed to extract content from grounded response - all paths exhausted")
+                metadata['extraction_path'] = 'none'
+                
+                # Two-step safety net: If grounding happened but no message, request synthesis
+                if grounded_effective and hasattr(response, 'model_dump'):
+                    response_data = response.model_dump()
+                    has_message = any(item.get('type') == 'message' for item in response_data.get('output', []))
+                    
+                    if not has_message:
+                        metadata['why_no_content'] = 'no_message_items_after_tool_calls'
+                        logger.warning("Grounding complete but no message - attempting synthesis step")
+                        
+                        # Step 2: Synthesis-only request (no tools)
+                        synthesis_params = {
+                            "model": request.model,
+                            "input": user_input,
+                            "instructions": (
+                                "Based on the web searches just performed, synthesize a final answer to the user's question. "
+                                "Provide a clear, concise response. Do not perform any additional searches."
+                            ),
+                            "max_output_tokens": effective_tokens,
+                            "temperature": params.get("temperature", 1.0),
+                            "text": {"verbosity": "medium"}
+                        }
+                        
+                        try:
+                            synthesis_response = await _call(synthesis_params)
+                            synthesis_content = _extract_text_from_responses_obj(synthesis_response)
+                            if not _is_empty(synthesis_content):
+                                content = synthesis_content
+                                response = synthesis_response
+                                metadata['synthesis_step_used'] = True
+                                metadata['extraction_path'] = 'synthesis_fallback'
+                                logger.info("Synthesis step successful, content recovered")
+                            else:
+                                metadata['synthesis_step_failed'] = True
+                                logger.error("Synthesis step failed to produce content")
+                        except Exception as e:
+                            logger.error(f"Synthesis step failed with error: {e}")
+                            metadata['synthesis_step_error'] = str(e)
         
         # Get system fingerprint
         sys_fp = getattr(response, "system_fingerprint", None)
@@ -440,12 +486,53 @@ class OpenAIAdapter:
         metadata["had_text_after_retry"] = not _is_empty(content)
         metadata["response_format"] = params.get("response_format")
         
+        # Add shape summary to metadata for debugging
+        if request.grounded and hasattr(response, 'model_dump'):
+            response_data = response.model_dump()
+            output_items = response_data.get('output', [])
+            
+            # Count output types
+            type_counts = {}
+            for item in output_items:
+                item_type = item.get('type', 'unknown')
+                type_counts[item_type] = type_counts.get(item_type, 0) + 1
+            
+            # Get last message content types if exists
+            message_items = [item for item in output_items if item.get('type') == 'message']
+            last_message_content_types = []
+            if message_items:
+                last_msg = message_items[-1]
+                content_blocks = last_msg.get('content', [])
+                last_message_content_types = [
+                    block.get('type') for block in content_blocks 
+                    if isinstance(block, dict)
+                ]
+            
+            # Count URL citations
+            url_citations = 0
+            for item in message_items:
+                for block in item.get('content', []):
+                    if isinstance(block, dict):
+                        annotations = block.get('annotations', [])
+                        url_citations += sum(
+                            1 for a in annotations 
+                            if isinstance(a, dict) and a.get('type') == 'url_citation'
+                        )
+            
+            metadata['shape_summary'] = {
+                'output_types': type_counts,
+                'last_message_content_types': last_message_content_types,
+                'url_citations_count': url_citations,
+                'extraction_path': metadata.get('extraction_path', 'unknown'),
+                'why_no_content': metadata.get('why_no_content')
+            }
+        
         # Debug logging for grounding
         if request.grounded:
             logger.info(
-                "OpenAI Grounding: requested=%s effective=%s tool_calls=%s fallback=%s",
+                "OpenAI Grounding: requested=%s effective=%s tool_calls=%s shape=%s",
                 request.grounded, grounded_effective, tool_call_count,
-                bool(metadata.get('grounding_extraction_fallback'))
+                metadata.get('shape_summary', {})
             )
         
         # Build response

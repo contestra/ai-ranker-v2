@@ -2,12 +2,14 @@ import json
 import os
 import time
 import logging
+import asyncio
 from typing import Any, Dict, List
 import vertexai
 from vertexai.generative_models import GenerativeModel, GenerationConfig, Tool, grounding
 from starlette.concurrency import run_in_threadpool
 
 from app.llm.types import LLMRequest, LLMResponse
+from .grounding_detection_helpers import detect_vertex_grounding
 
 logger = logging.getLogger(__name__)
 
@@ -190,25 +192,125 @@ class VertexAdapter:
         self._inited = True
 
     def _detect_grounding(self, response) -> tuple[bool, int]:
-        """Detect whether grounding actually ran (scan ALL candidates)"""
-        grounded_effective = False
-        tool_call_count = 0
+        """Detect whether grounding actually ran. Delegates to helper for testability."""
+        return detect_vertex_grounding(response)
+    
+    def _build_vertex_search_tools(self):
+        """
+        Build grounding tools - tries GenAI SDK first, then legacy Vertex SDK
+        """
+        # Try new Google GenAI SDK if GOOGLE_GENAI_USE_VERTEXAI is set
+        if os.getenv("GOOGLE_GENAI_USE_VERTEXAI", "false").lower() == "true":
+            try:
+                from google.genai.types import GoogleSearch, Tool as GenAITool
+                logger.info("Using Google GenAI SDK for grounding")
+                return [GenAITool(google_search=GoogleSearch())]
+            except Exception as e:
+                logger.warning(f"GenAI SDK grounding failed: {e}")
         
-        for cand in getattr(response, "candidates", []) or []:
-            gm = getattr(cand, "grounding_metadata", None)
-            if not gm:
-                continue
-            
-            web_queries = getattr(gm, "web_search_queries", []) or []
-            chunks = getattr(gm, "grounding_chunks", []) or []
-            entry_point = getattr(gm, "search_entry_point", None)
-            
-            if web_queries or chunks or entry_point:
-                grounded_effective = True
-                tool_call_count += len(web_queries) if web_queries else 1
-                break
+        # Legacy fallback for regular Vertex SDK
+        try:
+            logger.info("Using legacy Vertex SDK google_search_retrieval")
+            return [Tool.from_google_search_retrieval(grounding.GoogleSearchRetrieval())]
+        except Exception as e:
+            logger.warning(f"Failed to create grounding tools: {e}")
+            return []
+    
+    async def _complete_with_genai(self, req: LLMRequest, timeout: int = 60) -> LLMResponse:
+        """Complete using Google GenAI SDK with proper grounding support"""
+        from google import genai
+        from google.genai.types import GenerateContentConfig, GoogleSearch, Tool as GenAITool, HttpOptions
         
-        return grounded_effective, tool_call_count
+        t0 = time.perf_counter()
+        
+        # Initialize GenAI client
+        client = genai.Client(
+            project=self.project,
+            location=self.location,
+            http_options=HttpOptions(api_version="v1")
+        )
+        
+        # Get model name
+        raw_model = getattr(req, "model", None) or "gemini-2.5-pro"
+        model_name = _normalize_model_id(raw_model)
+        
+        # Build config
+        config_dict = {
+            "max_output_tokens": getattr(req, "max_tokens", None) or 6000,
+            "temperature": getattr(req, "temperature", 0.2),
+        }
+        
+        # Add grounding tools if requested
+        if req.grounded:
+            config_dict["tools"] = [GenAITool(google_search=GoogleSearch())]
+            logger.info("GenAI SDK: Enabling Google Search grounding")
+        
+        config = GenerateContentConfig(**config_dict)
+        
+        # Build messages
+        msgs = getattr(req, "messages", None) or []
+        prompt = "\n".join(m.get("content", "") if isinstance(m, dict) else str(m) for m in msgs) or "ping"
+        
+        try:
+            # Call with timeout
+            # When using Vertex AI, model name doesn't need 'models/' prefix
+            model_path = model_name if os.getenv('GOOGLE_GENAI_USE_VERTEXAI') == 'true' else f"models/{model_name}"
+            resp = await asyncio.wait_for(
+                run_in_threadpool(
+                    client.models.generate_content,
+                    model=model_path,
+                    contents=prompt,
+                    config=config
+                ),
+                timeout=timeout
+            )
+            
+            # Extract text and usage
+            text = ""
+            if hasattr(resp, 'text'):
+                text = resp.text
+            elif hasattr(resp, 'candidates'):
+                for cand in resp.candidates:
+                    if hasattr(cand, 'content') and hasattr(cand.content, 'parts'):
+                        for part in cand.content.parts:
+                            if hasattr(part, 'text'):
+                                text += part.text
+            
+            # Detect grounding
+            grounded_effective, tool_call_count = self._detect_grounding(resp)
+            
+            # Extract usage
+            usage = {}
+            if hasattr(resp, 'usage_metadata'):
+                meta = resp.usage_metadata
+                usage = {
+                    "prompt_tokens": getattr(meta, "prompt_token_count", 0),
+                    "completion_tokens": getattr(meta, "candidates_token_count", 0),
+                    "total_tokens": getattr(meta, "total_token_count", 0)
+                }
+            
+            latency_ms = int((time.perf_counter() - t0) * 1000)
+            
+            if req.grounded:
+                logger.info(
+                    "GenAI Grounding: requested=%s effective=%s tool_calls=%s",
+                    req.grounded, grounded_effective, tool_call_count
+                )
+            
+            return LLMResponse(
+                vendor="vertex",
+                model=model_name,
+                content=text,
+                usage=usage,
+                success=True,
+                latency_ms=latency_ms,
+                model_version=model_name,
+                grounded_effective=grounded_effective,
+            )
+            
+        except Exception as e:
+            logger.error(f"GenAI SDK error: {e}")
+            raise RuntimeError(f"GenAI SDK error: {e}") from e
     
     async def complete(self, req: LLMRequest, timeout: int = 60) -> LLMResponse:
         # Guard: structured JSON + grounding is unsupported
@@ -217,6 +319,11 @@ class VertexAdapter:
                 "GROUNDED_JSON_UNSUPPORTED: Gemini cannot combine JSON schema with GoogleSearch grounding. "
                 "Choose either grounding OR structured output, not both."
             )
+        
+        # Use GenAI SDK if enabled and grounding is requested
+        if os.getenv("GOOGLE_GENAI_USE_VERTEXAI", "false").lower() == "true" and req.grounded:
+            logger.info("Using Google GenAI SDK for grounded request")
+            return await self._complete_with_genai(req, timeout)
         
         self._ensure_init(use_grounding=req.grounded)
         t0 = time.perf_counter()
@@ -228,8 +335,12 @@ class VertexAdapter:
         # Log for debugging
         logger.info(f"Vertex call: raw_model={raw_model}, normalized={model_name}, location={os.environ.get('VERTEX_LOCATION')}")
         
+        # Get max_tokens from request, default to 6000 to match OpenAI
+        max_tokens = getattr(req, "max_tokens", None) or 6000
+        logger.info(f"Vertex using max_tokens={max_tokens}")
+        
         gen_cfg = GenerationConfig(
-            max_output_tokens=getattr(req, "max_tokens", None) or 64,
+            max_output_tokens=max_tokens,
             temperature=getattr(req, "temperature", 0.2),
         )
 
@@ -240,19 +351,25 @@ class VertexAdapter:
         # Enable Google Search when grounded
         tools = None
         if req.grounded:
-            tools = [Tool.from_google_search_retrieval(grounding.GoogleSearchRetrieval())]
-            model = GenerativeModel(model_name, tools=tools)
+            tools = self._build_vertex_search_tools()
+            if tools:
+                model = GenerativeModel(model_name, tools=tools)
+            else:
+                logger.warning("Grounding requested but tool creation failed, proceeding without tools")
+                model = GenerativeModel(model_name)
         else:
             model = GenerativeModel(model_name)
         
         # Call Vertex with timeout and handle potential SDK errors
         try:
-            # Note: The Vertex SDK doesn't support request_options timeout
-            # The timeout is handled at the async level
-            resp = await run_in_threadpool(
-                model.generate_content, 
-                prompt, 
-                generation_config=gen_cfg
+            # Enforce per-call timeout via asyncio
+            resp = await asyncio.wait_for(
+                run_in_threadpool(
+                    model.generate_content, 
+                    prompt, 
+                    generation_config=gen_cfg
+                ),
+                timeout=timeout
             )
         except Exception as e:
             error_msg = str(e)
