@@ -63,6 +63,30 @@ class TemplateResponse(BaseModel):
         from_attributes = True
 
 
+class RunTemplateRequest(BaseModel):
+    """Simplified request to execute a template - Phase 1"""
+    variables: Dict[str, Any] = Field(default_factory=dict)
+    grounded: bool = False
+    json_mode: bool = False
+    vendor: Optional[str] = None
+    model: Optional[str] = None
+    idempotency_key: Optional[str] = None
+    als_context: Optional[Dict[str, Any]] = None
+
+class RunTemplateResponse(BaseModel):
+    """Simplified response from template execution - Phase 1"""
+    run_id: str
+    template_id: str
+    output_text: str
+    grounded_requested: bool
+    grounded_effective: bool
+    vendor: str
+    model: str
+    latency_ms: int
+    usage: Dict[str, Any] = {}
+    created_at: str
+    metadata: Dict[str, Any] = {}
+
 class RunRequest(BaseModel):
     """Request body for POST /v1/templates/{id}/run"""
     
@@ -139,6 +163,10 @@ class RunResponse(BaseModel):
 class BatchRunRequest(BaseModel):
     """Request body for POST /v1/templates/{id}/batch-run"""
     
+    models: List[str] = Field(
+        ...,
+        description="List of model names to run template against"
+    )
     locales: List[str] = Field(
         ...,
         description="List of locales to run (e.g., ['en-US', 'de-DE'])"
@@ -147,11 +175,12 @@ class BatchRunRequest(BaseModel):
         default=["UNGROUNDED"],
         description="List of grounding modes to test"
     )
-    replicate_count: int = Field(
+    replicates: int = Field(
         default=1,
         ge=1,
         le=10,
-        description="Number of replicates per locale/mode combination"
+        description="Number of replicates per model/locale/mode combination",
+        alias="replicate_count"
     )
     drift_policy: DriftPolicy = Field(
         default="fail",
@@ -162,6 +191,10 @@ class BatchRunRequest(BaseModel):
         ge=1,
         le=50,
         description="Maximum parallel executions"
+    )
+    inputs: Optional[Dict[str, Any]] = Field(
+        default_factory=dict,
+        description="Template input variables"
     )
 
 
@@ -175,7 +208,10 @@ class BatchRunResponse(BaseModel):
     preflight_model_version: Optional[str] = None
     preflight_model_fingerprint: Optional[str] = None
     total_runs: int
+    successful_runs: Optional[int] = None
+    failed_runs: Optional[int] = None
     created_at: datetime
+    run_ids: Optional[List[str]] = None
     
     class Config:
         from_attributes = True

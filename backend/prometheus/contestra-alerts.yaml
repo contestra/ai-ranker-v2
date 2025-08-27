@@ -1,0 +1,35 @@
+groups:
+- name: contestra-ops
+  rules:
+  - alert: AuthTokenExpiringSoon
+    expr: min(contestra_auth_token_seconds_remaining) < 14400
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: Google auth token expiring in < 4 hours
+      description: Auth mode is nearing expiry. Renew ADC or verify WIF SA impersonation
+        is healthy.
+      runbook_url: https://example.com/runbooks/auth-expiry
+  - alert: ProxyModeRotatingDetected
+    expr: contestra_proxy_mode == 2
+    for: 3m
+    labels:
+      severity: warning
+    annotations:
+      summary: Rotating proxy detected (backbone required for long LLM runs)
+      description: Egress classified as rotating. Switch to backbone/static IP for
+        long generations.
+      runbook_url: https://example.com/runbooks/proxy-mode
+  - alert: OpenAIHighRateLimitRate
+    expr: (sum(increase(contestra_llm_rate_limit_events_total{vendor="openai"}[10m]))
+      > 0.03 * sum(increase(contestra_llm_latency_ms_count{vendor="openai"}[10m])))
+      and sum(increase(contestra_llm_latency_ms_count{vendor="openai"}[10m])) > 0
+    for: 10m
+    labels:
+      severity: warning
+    annotations:
+      summary: OpenAI 429 rate > 3% over 10m
+      description: "Reduce concurrency (3→2) or cap output tokens; staggering/backoff\
+        \ should be active."
+      runbook_url: https://example.com/runbooks/openai-429s

@@ -59,7 +59,7 @@ class PromptTemplate(Base):
 
 class Run(Base):
     """
-    Runs table with full provenance per PRD §6
+    Runs table with complete Phase-1 columns for run persistence
     """
     __tablename__ = 'runs'
     
@@ -74,33 +74,46 @@ class Run(Base):
     batch_run_index = Column(Integer)
     run_sha256 = Column(String(64), nullable=False)
     
-    # Locale/ALS
-    locale_selected = Column(String(10))
-    grounding_mode = Column(String(20))
-    grounded_effective = Column(Boolean)
+    # Core execution fields
+    vendor = Column(Text)
+    model = Column(Text)
+    grounded_requested = Column(Boolean, nullable=False, default=False)
+    grounded_effective = Column(Boolean, nullable=False, default=False)
+    json_mode = Column(Boolean, nullable=False, default=False)
     
-    # Model version tracking
-    model_version_effective = Column(String(100))
-    model_fingerprint = Column(String(255))
-    
-    # Output
-    output = Column(Text)
+    # Request/Response tracking
+    request_json = Column(JSON, nullable=False, default={})
+    output_text = Column(Text, nullable=False, default='')
+    response_json = Column(JSON, nullable=False, default={})
     response_output_sha256 = Column(String(64), index=True)
     output_json_valid = Column(Boolean)
     
-    # ALS tracking per PRD §4
+    # Performance metrics
+    latency_ms = Column(Integer, nullable=False, default=0)
+    tokens_input = Column(Integer, nullable=False, default=0)
+    tokens_output = Column(Integer, nullable=False, default=0)
+    tokens_reasoning = Column(Integer, nullable=False, default=0)
+    usage = Column(JSON)
+    
+    # Status tracking
+    status = Column(Text, nullable=False, default='succeeded')
+    error_message = Column(Text)
+    why_not_grounded = Column(Text)
+    
+    # Model versioning
+    model_version_effective = Column(String(100))
+    model_fingerprint = Column(String(255))
+    
+    # Locale/ALS fields
+    locale_selected = Column(String(10))
+    grounding_mode = Column(String(20))
     als_block_sha256 = Column(String(64))
     als_block_text = Column(Text)
     als_variant_id = Column(String(100))
     seed_key_id = Column(String(20))
     provoker_value = Column(String(100))
     
-    # Usage and performance
-    usage = Column(JSON)
-    latency_ms = Column(Integer)
-    
-    # Grounding attestation per PRD §5
-    why_not_grounded = Column(Text)
+    # Gemini two-step attestation
     step2_tools_invoked = Column(Boolean)
     step2_source_ref = Column(String(64))
     

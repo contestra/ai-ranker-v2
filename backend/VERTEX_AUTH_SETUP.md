@@ -85,6 +85,9 @@ The `entrypoint.sh` script automatically:
 
 ## Verification Endpoints
 
+### Health Endpoints
+`/health/auth` returns auth mode (WIF-ImpersonatedSA / ADC-User / etc.), principal, project/quota, and token expiry (>24h warn). `/health/proxy` labels egress as direct/backbone/rotating and shows masked proxy env + RTTs.
+
 ### Preflight Check
 ```bash
 curl http://localhost:8000/preflight/vertex
@@ -151,6 +154,9 @@ The adapter includes `_normalize_model_id()` to handle various model formats:
 
 ## Important Notes
 
+### Proxy Routing (2025-08-27)
+Vertex grounded runs use GenAI **without** client proxy (server-side search; use ALS for geography). If a proxy is required for Vertex ungrounded, the **SDK path** uses a **per-run env proxy** with backbone IPs (`VERTEX_PROXY_VIA_SDK=true`). Keep `NO_PROXY=metadata.google.internal,169.254.169.254,localhost,127.0.0.1`. OpenAI can use proxies directly; backbone for >2k tokens, streaming on.
+
 ### Gemini 2.5 Pro Characteristics
 - **Uses "thinking tokens"**: ~375-400 tokens for internal reasoning
 - **Recommended `max_tokens`**: 
@@ -163,11 +169,23 @@ The adapter includes `_normalize_model_id()` to handle various model formats:
 - **Solution**: Use ADC for local development
 - **Alternative**: Request policy exception from org admin
 
+## Operational Limits & Concurrency
+
+OpenAI concurrency **3** (stagger 15s; 429 backoff); Vertex direct **4**; Vertex SDK+env-proxy **1** (singleflight). SLA caps: Vertex direct **480s**, proxied **300s**.
+
+### Rate Limits
+- **OpenAI**: 30k TPM, max 3 concurrent, 15s stagger between starts
+- **Vertex**: 4 concurrent direct, 1 for SDK+proxy mode
+- **Timeouts**: Read 240s, Total 300s (OpenAI); 480s direct, 300s proxied (Vertex)
+
 ## Troubleshooting
 
 ### Empty Output
 - **Cause**: Insufficient `max_tokens` (thinking tokens consume budget)
 - **Solution**: Increase to 500+ tokens minimum
+
+### Empty Output (Grounded)
+Trigger a **Finalize Pass** (no tools/web) with **`max_tokens = original` (6000)** and streaming; add `finalize_pass=true`, `finalize_reason`, `finalize_attempts=1` to metadata.
 
 ### 404 Errors
 - **Cause**: Wrong model format or region
@@ -252,6 +270,9 @@ curl -X POST "http://localhost:8000/v1/templates" \
 | Error Handling | ✅ Working | Safety & finish detection |
 | Preflight Endpoint | ✅ Working | Shows credential info |
 | Smoke Tests | ✅ Passing | Both OpenAI and Vertex |
+| Proxy Strategy | ✅ Working | Vertex via SDK env-proxy; GenAI direct |
+| Rate-limits/SLA | ✅ Configured | OpenAI 3 concurrent, Vertex 4 direct/1 proxied |
+| Health Monitoring | ✅ Active | Auth, proxy, and LLM health endpoints |
 
-Last Updated: 2025-08-23
+Last Updated: 2025-08-27
 Status: **Production Ready**

@@ -5,6 +5,7 @@ Per PRD v2.7 Section 6
 
 from typing import Optional, Dict, Any
 from uuid import UUID
+from datetime import datetime
 from fastapi import APIRouter, Depends, Header, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,6 +15,8 @@ from app.schemas.templates import (
     TemplateResponse,
     RunRequest,
     RunResponse,
+    RunTemplateRequest,
+    RunTemplateResponse,
     BatchRunRequest,
     BatchRunResponse,
     RunListResponse
@@ -26,6 +29,54 @@ from app.core.jsondiff import generate_rfc6902_diff
 
 
 router = APIRouter(prefix="/v1", tags=["templates"])
+
+
+@router.get("/templates")
+async def list_templates(
+    session: AsyncSession = Depends(get_session),
+    x_organization_id: str = Header(..., alias="X-Organization-Id"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=100)
+):
+    """
+    List all templates for an organization.
+    Returns paginated results.
+    """
+    from app.models.models import PromptTemplate
+    from sqlalchemy import select
+    
+    # Build query
+    query = select(PromptTemplate).where(
+        PromptTemplate.org_id == x_organization_id
+    ).order_by(PromptTemplate.created_at.desc())
+    
+    # Apply pagination
+    offset = (page - 1) * page_size
+    query = query.offset(offset).limit(page_size)
+    
+    # Execute query
+    result = await session.execute(query)
+    templates = result.scalars().all()
+    
+    # Convert to response format
+    template_list = []
+    for template in templates:
+        template_list.append({
+            "template_id": str(template.template_id),
+            "template_sha256": template.template_sha256,
+            "template_name": template.template_name,
+            "canonical_json": template.canonical_json,
+            "org_id": template.org_id,
+            "created_at": template.created_at.isoformat() if template.created_at else None,
+            "created_by": template.created_by
+        })
+    
+    return {
+        "templates": template_list,
+        "page": page,
+        "page_size": page_size,
+        "total": len(template_list)
+    }
 
 
 @router.post("/templates", response_model=TemplateResponse)
@@ -125,6 +176,34 @@ async def get_template(
         created_at=template.created_at,
         created_by=template.created_by
     )
+
+
+@router.post("/templates/{template_id}/run-simple", response_model=RunTemplateResponse)
+async def run_template_simple(
+    template_id: UUID,
+    request: RunTemplateRequest,
+    session: AsyncSession = Depends(get_session),
+    x_organization_id: str = Header(..., alias="X-Organization-Id"),
+    x_user_id: Optional[str] = Header(None, alias="X-User-Id")
+):
+    """
+    Phase-1 simplified template execution with run persistence.
+    Stores all runs to the database for tracking and analysis.
+    """
+    from app.services.template_runner import execute_template_run
+    
+    try:
+        return await execute_template_run(
+            session=session,
+            template_id=template_id,
+            request=request,
+            org_id=x_organization_id,
+            user_id=x_user_id
+        )
+    except ValueError as e:
+        errors.not_found(code="TEMPLATE_NOT_FOUND", detail=str(e))
+    except RuntimeError as e:
+        errors.bad_request(code="EXECUTION_ERROR", detail=str(e))
 
 
 @router.post("/templates/{template_id}/run", response_model=RunResponse)
@@ -252,14 +331,71 @@ async def batch_run_template(
     - Deterministic locale × mode × replicate expansion
     - Configurable drift policy (hard|fail|warn)
     - Rate limiting and parallel execution control
+    - ALS template rotation per locale
     """
-    # TODO: Implement batch execution
-    # This requires TaskRunner abstraction
-    errors.service_unavailable(
-        code="NOT_IMPLEMENTED",
-        detail="Batch execution not yet implemented",
-        extra={"template_id": str(template_id)}
-    )
+    from app.services.batch_runner import BatchRunner
+    import json
+    
+    # Log the incoming request for debugging
+    print(f"=== BATCH RUN REQUEST DEBUG ===")
+    print(f"Template ID: {template_id}")
+    print(f"Organization ID: {x_organization_id}")
+    print(f"User ID: {x_user_id}")
+    print(f"Request type: {type(request)}")
+    print(f"Request data: {request.dict() if hasattr(request, 'dict') else request}")
+    
+    # Log the specific fields
+    if hasattr(request, 'dict'):
+        req_dict = request.dict()
+        print(f"Models: {req_dict.get('models')}")
+        print(f"Locales: {req_dict.get('locales')}")
+        print(f"Grounding modes: {req_dict.get('grounding_modes')}")
+        print(f"Replicates: {req_dict.get('replicates')}")
+        print(f"Drift policy: {req_dict.get('drift_policy')}")
+        print(f"Inputs: {req_dict.get('inputs')}")
+    
+    try:
+        batch_runner = BatchRunner()
+        
+        # Execute the batch with ALS integration
+        result = await batch_runner.execute_batch(
+            session=session,
+            template_id=str(template_id),
+            request=request,
+            org_id=x_organization_id,
+            user_id=x_user_id
+        )
+        
+        print(f"=== BATCH RUN SUCCESS ===")
+        print(f"Batch ID: {result.batch_id}")
+        print(f"Total runs: {result.total_runs}")
+        
+        return result
+        
+    except ValueError as e:
+        print(f"=== BATCH RUN ERROR: ValueError ===")
+        print(f"Error: {str(e)}")
+        errors.not_found(
+            code="TEMPLATE_NOT_FOUND",
+            detail=str(e),
+            extra={"template_id": str(template_id)}
+        )
+    except Exception as e:
+        print(f"=== BATCH RUN ERROR: Exception ===")
+        print(f"Error type: {type(e).__name__}")
+        print(f"Error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        
+        from fastapi import HTTPException
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "code": "BATCH_EXECUTION_ERROR",
+                "detail": f"Failed to execute batch: {str(e)}",
+                "extra": {"template_id": str(template_id)}
+            }
+        )
 
 
 @router.get("/templates/{template_id}/runs", response_model=RunListResponse)
@@ -280,11 +416,71 @@ async def list_runs(
     - locale: Filter by locale
     - Pagination via page/page_size
     """
-    # TODO: Implement run listing
-    # This requires Run model queries
+    from app.models.models import Run
+    from sqlalchemy import select, func
+    
+    # Build query
+    query = select(Run).where(
+        Run.template_id == template_id
+    )
+    
+    # Apply filters
+    if batch_id:
+        query = query.where(Run.batch_id == batch_id)
+    if locale:
+        query = query.where(Run.locale_selected == locale)
+    
+    # Count total
+    count_query = select(func.count()).select_from(Run).where(
+        Run.template_id == template_id
+    )
+    if batch_id:
+        count_query = count_query.where(Run.batch_id == batch_id)
+    if locale:
+        count_query = count_query.where(Run.locale_selected == locale)
+    
+    total_result = await session.execute(count_query)
+    total = total_result.scalar() or 0
+    
+    # Apply pagination
+    offset = (page - 1) * page_size
+    query = query.order_by(Run.created_at.desc()).limit(page_size).offset(offset)
+    
+    # Execute query
+    result = await session.execute(query)
+    runs = result.scalars().all()
+    
+    # Convert to response
+    run_items = []
+    for run in runs:
+        run_items.append(RunResponse(
+            run_id=str(run.run_id),
+            template_id=str(run.template_id),
+            batch_id=str(run.batch_id) if run.batch_id else None,
+            run_sha256=run.run_sha256,
+            grounded_requested=run.grounded_requested,
+            grounded_effective=run.grounded_effective or False,
+            vendor=run.vendor,
+            model=run.model,
+            usage={
+                "input_tokens": run.tokens_input or 0,
+                "output_tokens": run.tokens_output or 0,
+                "reasoning_tokens": run.tokens_reasoning or 0,
+                "total_tokens": (run.tokens_input or 0) + (run.tokens_output or 0) + (run.tokens_reasoning or 0)
+            },
+            latency_ms=run.latency_ms or 0,
+            status=run.status or "unknown",
+            created_at=run.created_at.isoformat() if run.created_at else datetime.utcnow().isoformat(),
+            model_version_effective=run.model_version_effective,
+            model_fingerprint=run.model_fingerprint,
+            drift_detected=False,
+            grounding_mode=run.grounding_mode or "UNGROUNDED",
+            locale_selected=run.locale_selected
+        ))
+    
     return RunListResponse(
-        runs=[],
-        total=0,
+        runs=run_items,
+        total=total,
         page=page,
         page_size=page_size
     )

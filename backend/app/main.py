@@ -96,6 +96,17 @@ app.include_router(api_router)
 from app.routers import preflight
 app.include_router(preflight.router)
 
+# Include health monitoring endpoints
+from app.routers import health_auth_endpoint, health_proxy_endpoint, health_llm_endpoint
+app.include_router(health_auth_endpoint.router, tags=["health"])
+app.include_router(health_proxy_endpoint.router, tags=["health"])
+app.include_router(health_llm_endpoint.router, tags=["health"])
+
+# Include Prometheus metrics endpoint
+from app.prometheus_metrics import metrics_router
+if metrics_router:
+    app.include_router(metrics_router)
+
 @app.get("/")
 async def root():
     """Root endpoint with API info"""

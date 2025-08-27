@@ -3,13 +3,85 @@ import os
 import time
 import logging
 import asyncio
+import httpx
 from typing import Any, Dict, List
+from contextlib import contextmanager
 import vertexai
 from vertexai.generative_models import GenerativeModel, GenerationConfig, Tool, grounding
 from starlette.concurrency import run_in_threadpool
 
 from app.llm.types import LLMRequest, LLMResponse
 from .grounding_detection_helpers import detect_vertex_grounding
+
+# --- Proxy/vantage helpers (Webshare) ---
+def _normalize_cc(cc: str) -> str:
+    if not cc:
+        return "US"
+    cc = cc.strip().upper()
+    return "GB" if cc == "UK" else cc
+
+def _mask_proxy(uri: str) -> str:
+    """Helper to mask proxy credentials for logging"""
+    try:
+        from urllib.parse import urlsplit
+        p = urlsplit(uri)
+        user = (p.username or "")
+        host = (p.hostname or "")
+        port = f":{p.port}" if p.port else ""
+        return f"{p.scheme}://{user}:***@{host}{port}"
+    except Exception:
+        return "<masked>"
+
+def _extract_country_from_request(req) -> str:
+    for attr in ("country_code", "country", "locale_country"):
+        val = getattr(req, attr, None)
+        if isinstance(val, str) and val.strip():
+            return _normalize_cc(val)
+    for field in ("locale", "routing", "meta"):
+        obj = getattr(req, field, None)
+        if isinstance(obj, dict):
+            for k in ("country_code", "country", "cc"):
+                v = obj.get(k)
+                if isinstance(v, str) and v.strip():
+                    return _normalize_cc(v)
+    return "US"
+
+def _should_use_proxy(req) -> bool:
+    vp = getattr(req, "vantage_policy", None)
+    if not vp:
+        meta = getattr(req, "meta", {}) if hasattr(req, "meta") else {}
+        vp = meta.get("vantage_policy")
+    if not vp:
+        return False
+    # Handle both enum and string representations
+    vp_str = str(vp).upper().replace("VANTAGEPOLICY.", "")
+    return vp_str in ("PROXY_ONLY", "ALS_PLUS_PROXY")
+
+def _proxy_connection_mode(req) -> str:
+    meta = getattr(req, "meta", {}) if hasattr(req, "meta") else {}
+    return str(meta.get("proxy_connection", "rotating")).lower()
+
+def _build_webshare_proxy_uri(country_code: str, mode: str = "rotating", use_socks5: bool = True) -> str | None:
+    user = os.getenv("WEBSHARE_USERNAME")
+    pwd = os.getenv("WEBSHARE_PASSWORD")
+    host = os.getenv("WEBSHARE_HOST", "p.webshare.io")
+    
+    if not (user and pwd):
+        return None
+    
+    cc = _normalize_cc(country_code)
+    # Webshare format: rotating uses -rotate suffix, backbone uses numbered suffix (-1)
+    suffix = f"{user}-{cc}-rotate" if mode == "rotating" else f"{user}-{cc}-1"
+    
+    if use_socks5:
+        # Use SOCKS5 for better stability with residential proxies
+        socks_port = os.getenv("WEBSHARE_SOCKS_PORT", "1080")
+        return f"socks5://{suffix}:{pwd}@{host}:{socks_port}"
+    else:
+        # HTTP proxy fallback
+        http_port = os.getenv("WEBSHARE_PORT", "80")
+        return f"http://{suffix}:{pwd}@{host}:{http_port}"
+# --- end proxy helpers ---
 
 logger = logging.getLogger(__name__)
 
@@ -153,6 +225,8 @@ class VertexAdapter:
         self.project = project or os.getenv("VERTEX_PROJECT", "contestra-ai")
         self.location = location or os.getenv("VERTEX_LOCATION", "global")
         logger.info("Vertex adapter initialized: project=%s location=%s", self.project, self.location)
+        # Ensure metadata endpoints are never proxied (safe on any platform)
+        os.environ.setdefault("NO_PROXY", "metadata.google.internal,169.254.169.254,localhost,127.0.0.1")
     
     def _is_structured_output(self, req) -> bool:
         """Check if request wants structured JSON output"""
@@ -217,18 +291,106 @@ class VertexAdapter:
             return []
     
     async def _complete_with_genai(self, req: LLMRequest, timeout: int = 60) -> LLMResponse:
-        """Complete using Google GenAI SDK with proper grounding support"""
+        """Complete using Google GenAI SDK with proper grounding and proxy support
+        
+        NOTE: The GenAI SDK has known issues with residential proxies (HTTP and SOCKS5),
+        often resulting in "Server disconnected" errors. This is a documented httpx/HTTP2/
+        keep-alive/proxy issue. For stable proxy support with Vertex, consider:
+        1. Using environment variables (HTTPS_PROXY) with the regular Vertex SDK
+        2. Using OpenAI adapter for proxy-required requests
+        3. Relying on ALS (Ambient Location Signals) for geographic context
+        """
         from google import genai
         from google.genai.types import GenerateContentConfig, GoogleSearch, Tool as GenAITool, HttpOptions
         
         t0 = time.perf_counter()
         
+        # Initialize tracking variables for logging/telemetry
+        vantage_policy = str(getattr(req, 'vantage_policy', 'NONE')).upper().replace("VANTAGEPOLICY.", "")
+        proxy_mode = None
+        country_code = None
+        masked_proxy = None
+        connect_s, read_s, total_s = 30, 60, timeout  # Default timeouts
+        metadata = {}
+        
+        # Build per-run HTTP options (add proxies if vantage_policy includes PROXY)
+        http_options = HttpOptions(api_version="v1")
+        proxy_requested = _should_use_proxy(req)
+        
+        if proxy_requested:
+            try:
+                country_code = _extract_country_from_request(req)
+                # Determine proxy mode based on token count
+                max_tokens = getattr(req, "max_tokens", 6000)
+                if max_tokens and max_tokens > 2000:
+                    proxy_mode = "backbone"
+                else:
+                    proxy_mode = "rotating"
+                
+                _proxy_uri = _build_webshare_proxy_uri(country_code, proxy_mode)
+                if _proxy_uri:
+                    # Create masked proxy URL for logging
+                    from urllib.parse import urlsplit
+                    p = urlsplit(_proxy_uri)
+                    masked_proxy = f"{p.scheme}://{p.username}:***@{p.hostname}:{p.port or ''}"
+                    
+                    # Update timeout values for proxy
+                    connect_s, read_s, total_s = 60, 240, 300
+                    timeout = max(timeout, 300)  # Ensure at least 300s for proxy requests
+                    
+                    # Use client_args and async_client_args to pass proxy to underlying httpx client
+                    # Note: Google GenAI SDK uses httpx internally, which requires 'proxy' not 'proxies'
+                    # Force HTTP/1.1 to avoid HTTP/2 proxy disconnect issues
+                    http_options = HttpOptions(
+                        api_version="v1",
+                        client_args={
+                            "proxy": _proxy_uri,
+                            "http2": False,  # force HTTP/1.1 through proxy
+                            "timeout": httpx.Timeout(connect=connect_s, read=read_s, write=60.0, pool=read_s),
+                            "limits": httpx.Limits(max_keepalive_connections=0, keepalive_expiry=0),  # no keep-alive reuse
+                            "trust_env": True
+                        },
+                        async_client_args={
+                            "proxy": _proxy_uri,
+                            "http2": False,
+                            "timeout": httpx.Timeout(connect=connect_s, read=read_s, write=60.0, pool=read_s),
+                            "limits": httpx.Limits(max_keepalive_connections=0, keepalive_expiry=0),
+                            "trust_env": True
+                        }
+                    )
+                    
+                    # Also set OS-level proxy for any underlying Google auth calls
+                    os.environ["HTTPS_PROXY"] = _proxy_uri
+                    os.environ["HTTP_PROXY"] = _proxy_uri
+                    logger.info(f"GenAI proxy configured: mode={proxy_mode}, country={country_code}")
+            except Exception as _e:
+                logger.warning(f"GenAI proxy setup failed; proceeding without proxy: {_e}")
+        
+        # [LLM_ROUTE] Log before API call
+        route_info = {
+            "vendor": "vertex",
+            "model": getattr(req, "model", "gemini-2.5-pro"),
+            "vantage_policy": vantage_policy,
+            "proxy_mode": proxy_mode if proxy_mode else "direct",
+            "country": country_code if country_code else "none",
+            "grounded": req.grounded,
+            "max_tokens": getattr(req, "max_tokens", 6000),
+            "timeouts_s": {"connect": connect_s, "read": read_s, "total": total_s}
+        }
+        logger.info(f"[LLM_ROUTE] {json.dumps(route_info)}")
+        
         # Initialize GenAI client
-        client = genai.Client(
-            project=self.project,
-            location=self.location,
-            http_options=HttpOptions(api_version="v1")
-        )
+        try:
+            client = genai.Client(
+                project=self.project,
+                location=self.location,
+                http_options=http_options
+            )
+        finally:
+            # Clean up OS-level proxy vars after client creation
+            if proxy_requested:
+                os.environ.pop("HTTPS_PROXY", None)
+                os.environ.pop("HTTP_PROXY", None)
         
         # Get model name
         raw_model = getattr(req, "model", None) or "gemini-2.5-pro"
@@ -297,6 +459,33 @@ class VertexAdapter:
                     req.grounded, grounded_effective, tool_call_count
                 )
             
+            # Populate metadata with proxy telemetry
+            if proxy_mode:
+                metadata["vantage_policy"] = vantage_policy
+                metadata["proxy_mode"] = proxy_mode
+                metadata["proxy_country"] = country_code if country_code else "none"
+                metadata["proxy_uri_masked"] = masked_proxy if masked_proxy else "none"
+                metadata["timeouts_s"] = {
+                    "connect": connect_s,
+                    "read": read_s,
+                    "total": total_s
+                }
+            
+            # [LLM_RESULT] Log successful response
+            result_info = {
+                "vendor": "vertex",
+                "model": model_name,
+                "vantage_policy": vantage_policy,
+                "proxy_mode": proxy_mode if proxy_mode else "direct",
+                "country": country_code if country_code else "none",
+                "grounded": req.grounded,
+                "grounded_effective": grounded_effective,
+                "latency_ms": latency_ms,
+                "usage": usage,
+                "content_length": len(text) if text else 0
+            }
+            logger.info(f"[LLM_RESULT] {json.dumps(result_info)}")
+            
             return LLMResponse(
                 vendor="vertex",
                 model=model_name,
@@ -306,10 +495,25 @@ class VertexAdapter:
                 latency_ms=latency_ms,
                 model_version=model_name,
                 grounded_effective=grounded_effective,
+                metadata=metadata
             )
             
         except Exception as e:
-            logger.error(f"GenAI SDK error: {e}")
+            # [LLM_TIMEOUT] Log timeout/error
+            is_timeout = "timeout" in str(e).lower() or "timed out" in str(e).lower()
+            timeout_info = {
+                "vendor": "vertex",
+                "model": model_name,
+                "vantage_policy": vantage_policy,
+                "proxy_mode": proxy_mode if proxy_mode else "direct",
+                "country": country_code if country_code else "none",
+                "grounded": req.grounded,
+                "max_tokens": config_dict.get("max_output_tokens", 6000),
+                "timeouts_s": {"connect": connect_s, "read": read_s, "total": total_s},
+                "error_type": "timeout" if is_timeout else "error",
+                "error_msg": str(e)[:200]
+            }
+            logger.error(f"[LLM_TIMEOUT] {json.dumps(timeout_info)}")
             raise RuntimeError(f"GenAI SDK error: {e}") from e
     
     async def complete(self, req: LLMRequest, timeout: int = 60) -> LLMResponse:
@@ -320,20 +524,104 @@ class VertexAdapter:
                 "Choose either grounding OR structured output, not both."
             )
         
-        # Use GenAI SDK if enabled and grounding is requested
-        if os.getenv("GOOGLE_GENAI_USE_VERTEXAI", "false").lower() == "true" and req.grounded:
-            logger.info("Using Google GenAI SDK for grounded request")
+        # Determine if we need the GenAI SDK path
+        use_genai = os.getenv("GOOGLE_GENAI_USE_VERTEXAI", "false").lower() == "true"
+        proxy_requested = _should_use_proxy(req)
+        
+        # Check if we should use SDK with per-run environment proxy (fallback for unstable GenAI)
+        use_sdk_env_proxy = proxy_requested and (not use_genai or os.getenv("VERTEX_PROXY_VIA_SDK", "false").lower() == "true")
+        
+        # Route to GenAI SDK if grounding or proxy (and GenAI enabled, not using SDK fallback)
+        if use_genai and (req.grounded or proxy_requested) and not use_sdk_env_proxy:
+            if req.grounded:
+                logger.info("Using Google GenAI SDK for grounded request")
+            elif proxy_requested:
+                logger.info("Using Google GenAI SDK for proxy request")
             return await self._complete_with_genai(req, timeout)
+        
+        # If proxy requested but GenAI disabled and not using SDK env proxy, fail fast
+        if proxy_requested and not use_genai and not use_sdk_env_proxy:
+            logger.error("[LLM_ROUTE] vertex fail-fast: proxy requested but GOOGLE_GENAI_USE_VERTEXAI!=true")
+            raise ValueError(
+                "PROXY_REQUESTED_BUT_GENAI_DISABLED: Vertex SDK path does not support per-call proxies. "
+                "Set GOOGLE_GENAI_USE_VERTEXAI=true (routes via GenAI) or VERTEX_PROXY_VIA_SDK=true "
+                "(uses SDK with env proxy) or remove the proxy request (vantage_policy=ALS_ONLY/NONE)."
+            )
         
         self._ensure_init(use_grounding=req.grounded)
         t0 = time.perf_counter()
 
+        # Initialize tracking variables for logging/telemetry
+        vantage_policy = str(getattr(req, 'vantage_policy', 'NONE')).upper().replace("VANTAGEPOLICY.", "")
+        proxy_mode = None
+        country_code = None
+        masked_proxy = None
+        metadata = {}
+        
+        # Helper to manage per-run proxy environment
+        @contextmanager
+        def proxy_environment():
+            if use_sdk_env_proxy:
+                # Build proxy URI
+                nonlocal proxy_mode, country_code, masked_proxy
+                country_code = _extract_country_from_request(req)
+                max_tokens = getattr(req, "max_tokens", 6000)
+                proxy_mode = "backbone" if max_tokens and max_tokens > 2000 else "rotating"
+                proxy_uri = _build_webshare_proxy_uri(country_code, proxy_mode, use_socks5=False)  # Use HTTP for env proxy
+                
+                if proxy_uri:
+                    # Create masked version for logging
+                    masked_proxy = _mask_proxy(proxy_uri)
+                    
+                    # Save current env
+                    old_https = os.environ.get("HTTPS_PROXY")
+                    old_http = os.environ.get("HTTP_PROXY")
+                    old_all = os.environ.get("ALL_PROXY")
+                    
+                    # Set proxy env vars
+                    os.environ["HTTPS_PROXY"] = proxy_uri
+                    os.environ["HTTP_PROXY"] = proxy_uri
+                    os.environ["ALL_PROXY"] = proxy_uri
+                    logger.info(f"SDK proxy environment set: mode={proxy_mode}, country={country_code}")
+                    
+                    try:
+                        yield
+                    finally:
+                        # Restore original env
+                        if old_https is not None:
+                            os.environ["HTTPS_PROXY"] = old_https
+                        else:
+                            os.environ.pop("HTTPS_PROXY", None)
+                        if old_http is not None:
+                            os.environ["HTTP_PROXY"] = old_http
+                        else:
+                            os.environ.pop("HTTP_PROXY", None)
+                        if old_all is not None:
+                            os.environ["ALL_PROXY"] = old_all
+                        else:
+                            os.environ.pop("ALL_PROXY", None)
+                else:
+                    yield
+            else:
+                yield
+        
         # Normalize model ID to short form
         raw_model = getattr(req, "model", None) or "gemini-2.5-pro"
         model_name = _normalize_model_id(raw_model)
         
-        # Log for debugging
-        logger.info(f"Vertex call: raw_model={raw_model}, normalized={model_name}, location={os.environ.get('VERTEX_LOCATION')}")
+        # [LLM_ROUTE] Log before API call
+        route_info = {
+            "vendor": "vertex",
+            "model": model_name,
+            "vantage_policy": vantage_policy,
+            "proxy_mode": proxy_mode if proxy_mode else "direct",
+            "country": country_code if country_code else "none",
+            "grounded": req.grounded,
+            "max_tokens": getattr(req, "max_tokens", 6000),
+            "timeouts_s": {"connect": 30, "read": 60, "total": timeout},
+            "sdk_env_proxy": use_sdk_env_proxy
+        }
+        logger.info(f"[LLM_ROUTE] {json.dumps(route_info)}")
         
         # Get max_tokens from request, default to 6000 to match OpenAI
         max_tokens = getattr(req, "max_tokens", None) or 6000
@@ -362,15 +650,17 @@ class VertexAdapter:
         
         # Call Vertex with timeout and handle potential SDK errors
         try:
-            # Enforce per-call timeout via asyncio
-            resp = await asyncio.wait_for(
-                run_in_threadpool(
-                    model.generate_content, 
-                    prompt, 
-                    generation_config=gen_cfg
-                ),
-                timeout=timeout
-            )
+            # Use proxy environment if requested
+            with proxy_environment():
+                # Enforce per-call timeout via asyncio
+                resp = await asyncio.wait_for(
+                    run_in_threadpool(
+                        model.generate_content, 
+                        prompt, 
+                        generation_config=gen_cfg
+                    ),
+                    timeout=timeout
+                )
         except Exception as e:
             error_msg = str(e)
             # Handle the specific "no parts" error from SDK
@@ -385,9 +675,25 @@ class VertexAdapter:
                     success=True,
                     latency_ms=int((time.perf_counter() - t0) * 1000),
                     model_version=model_name,
-                    grounded_effective=False
+                    grounded_effective=False,
+                    metadata=metadata
                 )
-            # Re-raise other errors
+            
+            # [LLM_TIMEOUT] Log timeout/error
+            is_timeout = "timeout" in error_msg.lower() or "timed out" in error_msg.lower()
+            timeout_info = {
+                "vendor": "vertex",
+                "model": model_name,
+                "vantage_policy": vantage_policy,
+                "proxy_mode": "direct",
+                "country": "none",
+                "grounded": req.grounded,
+                "max_tokens": getattr(req, "max_tokens", 6000),
+                "timeouts_s": {"connect": 30, "read": 60, "total": timeout},
+                "error_type": "timeout" if is_timeout else "error",
+                "error_msg": str(e)[:200]
+            }
+            logger.error(f"[LLM_TIMEOUT] {json.dumps(timeout_info)}")
             raise RuntimeError(f"Vertex API error: {e}") from e
 
         latency_ms = int((time.perf_counter() - t0) * 1000)
@@ -417,6 +723,30 @@ class VertexAdapter:
                 req.grounded, grounded_effective, tool_call_count, self.location
             )
 
+        # Add proxy telemetry if used
+        if use_sdk_env_proxy and proxy_mode:
+            metadata["vantage_policy"] = vantage_policy
+            metadata["proxy_mode"] = proxy_mode
+            metadata["proxy_country"] = country_code if country_code else "none"
+            metadata["proxy_uri_masked"] = masked_proxy if masked_proxy else "none"
+            metadata["sdk_env_proxy"] = True
+        
+        # [LLM_RESULT] Log successful response
+        result_info = {
+            "vendor": "vertex",
+            "model": model_name,
+            "vantage_policy": vantage_policy,
+            "proxy_mode": proxy_mode if proxy_mode else "direct",
+            "country": country_code if country_code else "none",
+            "grounded": req.grounded,
+            "grounded_effective": grounded_effective,
+            "latency_ms": latency_ms,
+            "usage": usage,
+            "content_length": len(text) if text else 0,
+            "sdk_env_proxy": use_sdk_env_proxy
+        }
+        logger.info(f"[LLM_RESULT] {json.dumps(result_info)}")
+        
         return LLMResponse(
             vendor="vertex",
             model=model_name,
@@ -427,5 +757,5 @@ class VertexAdapter:
             model_version=model_name,
             model_fingerprint=None,
             grounded_effective=grounded_effective,
-            metadata={},
+            metadata=metadata,
         )

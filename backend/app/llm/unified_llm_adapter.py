@@ -58,9 +58,8 @@ class UnifiedLLMAdapter:
             Unified LLM response
         """
         
-        # Step 1: Apply ALS if context provided
-        if request.als_context:
-            request = self._apply_als(request)
+        # Step 1: ALS is now handled at template_runner level with proper message ordering
+        # DO NOT apply ALS here - it's already in the messages with correct system prompt
         
         # Step 2: Infer vendor if missing
         if not request.vendor:
@@ -123,11 +122,12 @@ class UnifiedLLMAdapter:
             return request
         
         # Build ALS block
-        locale = als_context.get('locale', 'en-US')
+        country_code = als_context.get('country_code', 'US')
         als_block = self.als_builder.build_als_block(
-            locale=locale,
-            template_id=request.template_id,
-            seed_key_id=als_context.get('seed_key_id', 'k1')
+            country=country_code,
+            max_chars=350,
+            include_weather=True,
+            randomize=True
         )
         
         # Prepend ALS to the first user message

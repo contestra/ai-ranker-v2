@@ -6,6 +6,15 @@ Phase-0 implementation: FastAPI + Neon only
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Any
 from datetime import datetime
+from enum import Enum
+
+
+class VantagePolicy(str, Enum):
+    """Geographic vantage point policy for experimental control"""
+    NONE = "NONE"                      # Direct connection, no ALS, no proxy (control)
+    ALS_ONLY = "ALS_ONLY"              # Add ALS context, direct connection
+    PROXY_ONLY = "PROXY_ONLY"          # Use proxy, no ALS context
+    ALS_PLUS_PROXY = "ALS_PLUS_PROXY" # Both proxy and ALS context
 
 
 @dataclass
@@ -22,6 +31,11 @@ class LLMRequest:
     seed: Optional[int] = None
     tools: Optional[List[Dict]] = None # Tool definitions for function calling
     timeout_seconds: int = 60
+    
+    # Vantage policy for proxy/ALS control
+    vantage_policy: Optional[VantagePolicy] = None
+    country_code: Optional[str] = None  # ISO country code (e.g., "US", "DE", "GB")
+    meta: Optional[Dict[str, Any]] = None  # Additional metadata for proxy config
     
     # Template tracking
     template_id: Optional[str] = None
