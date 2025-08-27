@@ -81,7 +81,8 @@
       "Bash(export PYTHONPATH=/home/leedr/ai-ranker-v2/backend)",
       "Bash(export LLM_TIMEOUT_GR=240)",
       "Bash(export:*)",
-      "Bash(timeout:*)"
+      "Bash(timeout:*)",
+      "Bash(bash:*)"
     ],
     "deny": [],
     "ask": [],
@@ -93,7 +94,8 @@
       "/mnt/d/OneDrive/CONTESTRA/Microapps/Adapter-Copies/250826-fixed-grounding",
       "/mnt/d/OneDrive/CONTESTRA/Microapps/Adapter-Copies/250826-draft-rotating-proxy-v2-not-working",
       "/mnt/d/OneDrive/CONTESTRA/Microapps/Adapter-Copies/250826-draft-rotating-proxy-v3-not-working",
-      "/mnt/d/OneDrive/CONTESTRA/Microapps/Adapter-Copies"
+      "/mnt/d/OneDrive/CONTESTRA/Microapps/Adapter-Copies",
+      "/mnt/c/Users/leedr/Downloads"
     ]
   }
 }

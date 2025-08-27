@@ -68,33 +68,6 @@ LLM_RATE_LIMITS = Counter(
     registry=REGISTRY,
 )
 
-
-
-# OpenAI concurrency & scheduling
-OPENAI_ACTIVE_CONCURRENCY = Gauge(
-    "contestra_openai_active_concurrency",
-    "Number of in-flight OpenAI requests",
-    [],
-    registry=REGISTRY,
-)
-OPENAI_NEXT_SLOT_EPOCH = Gauge(
-    "contestra_openai_next_slot_epoch",
-    "Epoch seconds of next allowed OpenAI launch slot",
-    [],
-    registry=REGISTRY,
-)
-OPENAI_STAGGER_DELAYS = Counter(
-    "contestra_openai_stagger_delays_total",
-    "Count of times an OpenAI launch was delayed to enforce staggering",
-    [],
-    registry=REGISTRY,
-)
-OPENAI_TPM_WINDOW_DEFERRALS = Counter(
-    "contestra_openai_tpm_window_deferrals_total",
-    "Count of deferrals due to TPM window budgeting",
-    [],
-    registry=REGISTRY,
-)
 # --- Update helpers ---
 
 _STATUS_VALUES = {"ok": 0, "warn": 1, "error": 2}
@@ -171,32 +144,6 @@ def inc_rate_limit(vendor: str) -> None:
     except Exception:
         pass
 
-
-
-# --- OpenAI concurrency/scheduling helpers ---
-def set_openai_active_concurrency(n: int) -> None:
-    try:
-        OPENAI_ACTIVE_CONCURRENCY.set(float(n))
-    except Exception:
-        pass
-
-def set_openai_next_slot_epoch(epoch_seconds: int) -> None:
-    try:
-        OPENAI_NEXT_SLOT_EPOCH.set(float(epoch_seconds))
-    except Exception:
-        pass
-
-def inc_stagger_delays() -> None:
-    try:
-        OPENAI_STAGGER_DELAYS.inc()
-    except Exception:
-        pass
-
-def inc_tpm_deferrals() -> None:
-    try:
-        OPENAI_TPM_WINDOW_DEFERRALS.inc()
-    except Exception:
-        pass
 # --- FastAPI route ---
 
 if APIRouter is not None:

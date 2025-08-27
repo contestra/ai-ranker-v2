@@ -334,38 +334,7 @@ async def batch_run_template(
     - ALS template rotation per locale
     """
     from app.services.batch_runner import BatchRunner
-    from app.core.config import get_settings
     import json
-    
-    # === Preflight TPM/parallelism guard (OpenAI) ===
-    try:
-        s = get_settings()
-        # Build configurations just to count OpenAI runs
-        batch_runner_preview = BatchRunner()
-        _configs = batch_runner_preview._generate_run_configurations(request)
-        openai_runs = sum(1 for c in _configs if isinstance(c.get("model"), str) and c["model"].lower().startswith("gpt-"))
-        
-        if openai_runs > 0:
-            est_tokens = openai_runs * int(s.openai_est_tokens_per_run)
-            per_min_budget = int(s.openai_tpm_limit * (1.0 - float(s.openai_tpm_headroom)))
-            
-            if est_tokens > per_min_budget:
-                errors.service_unavailable(
-                    code="BATCH_RATE_LIMITED",
-                    detail="Projected OpenAI token usage exceeds per-minute budget",
-                    extra={
-                        "openai_runs": openai_runs,
-                        "est_tokens_per_run": int(s.openai_est_tokens_per_run),
-                        "est_total_tokens": est_tokens,
-                        "per_min_budget": per_min_budget,
-                        "tpm_limit": int(s.openai_tpm_limit),
-                        "headroom": float(s.openai_tpm_headroom),
-                        "suggested_wait_seconds": 60
-                    }
-                )
-    except Exception as _e:
-        # Preflight is best-effort; continue if anything goes wrong
-        print(f"Preflight guard warning: {_e}")
     
     # Log the incoming request for debugging
     print(f"=== BATCH RUN REQUEST DEBUG ===")

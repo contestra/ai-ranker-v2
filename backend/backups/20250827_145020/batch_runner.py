@@ -18,8 +18,6 @@ from app.services.template_runner import execute_template_run
 from app.services.als.als_builder import ALSBuilder
 from app.services.als.country_codes import is_valid_country, get_all_countries
 from app.core.canonicalization import compute_sha256
-from app.core.config import get_settings
-from app.prometheus_metrics import set_openai_active_concurrency, set_openai_next_slot_epoch, inc_stagger_delays, inc_tpm_deferrals
 
 
 class BatchRunner:
@@ -27,20 +25,6 @@ class BatchRunner:
     
     def __init__(self):
         self.als_builder = ALSBuilder()
-        # OpenAI gating (in-process)
-        s = get_settings()
-        self._openai_sem = asyncio.Semaphore(max(1, s.openai_max_concurrency))
-        self._openai_active = 0
-        self._openai_active_lock = asyncio.Lock()
-        self._slot_lock = asyncio.Lock()
-        self._next_slot_epoch = 0.0
-        self._stagger_seconds = max(0, int(s.openai_stagger_seconds))
-        self._tpm_limit = max(1000, int(s.openai_tpm_limit))
-        self._tpm_headroom = max(0.0, min(0.9, float(s.openai_tpm_headroom)))
-        self._tpm_est = max(1, int(s.openai_est_tokens_per_run))
-        self._tpm_lock = asyncio.Lock()
-        self._tpm_window_minute = int(time.time() // 60)
-        self._tpm_used = 0
     
     def _extract_country_from_locale(self, locale: str) -> str:
         """Extract country code from locale (e.g., 'en-US' -> 'US')"""
@@ -101,55 +85,6 @@ class BatchRunner:
                         run_index += 1
         
         return configurations
-
-    # --- OpenAI gating helpers ---
-    def _is_openai_model(self, model: str) -> bool:
-        return isinstance(model, str) and model.lower().startswith("gpt-")
-
-    async def _await_openai_tpm_budget(self):
-        now = time.time()
-        minute = int(now // 60)
-        async with self._tpm_lock:
-            if minute != self._tpm_window_minute:
-                self._tpm_window_minute = minute
-                self._tpm_used = 0
-            budget = int(self._tpm_limit * (1.0 - self._tpm_headroom))
-            if self._tpm_used + self._tpm_est > budget:
-                inc_tpm_deferrals()
-                await asyncio.sleep(max(0.0, 60.0 - (now % 60.0)) + 0.05)
-                self._tpm_window_minute = int(time.time() // 60)
-                self._tpm_used = 0
-            self._tpm_used += self._tpm_est
-
-    async def _await_openai_launch_slot(self):
-        if self._stagger_seconds <= 0:
-            return
-        async with self._slot_lock:
-            now = time.time()
-            next_slot = max(self._next_slot_epoch, now)
-            delay = max(0.0, next_slot - now)
-            if delay > 0.0:
-                inc_stagger_delays()
-            # jitter ±20% of stagger, capped 3s
-            jitter = min(3.0, 0.2 * self._stagger_seconds)
-            # flip sign by alternating (not necessary; use random if available).
-            self._next_slot_epoch = next_slot + self._stagger_seconds + jitter
-            set_openai_next_slot_epoch(int(self._next_slot_epoch))
-        if delay > 0.0:
-            await asyncio.sleep(delay)
-
-    async def _openai_concurrency_context(self):
-        await self._openai_sem.acquire()
-        async with self._openai_active_lock:
-            self._openai_active += 1
-            set_openai_active_concurrency(self._openai_active)
-        try:
-            yield
-        finally:
-            async with self._openai_active_lock:
-                self._openai_active = max(0, self._openai_active - 1)
-                set_openai_active_concurrency(self._openai_active)
-            self._openai_sem.release()
     
     def _compute_batch_hash(self, template_id: str, request: BatchRunRequest) -> str:
         """Compute deterministic hash for batch configuration"""
@@ -243,25 +178,13 @@ class BatchRunner:
                     )
                     
                     # Execute the run
-                    if self._is_openai_model(config["model"]):
-                        await self._await_openai_tpm_budget()
-                        await self._await_openai_launch_slot()
-                        async for _ in self._openai_concurrency_context():
-                            response = await execute_template_run(
-                                session=session,
-                                template_id=template_id,
-                                request=run_request,
-                                org_id=org_id,
-                                user_id=user_id
-                            )
-                    else:
-                        response = await execute_template_run(
-                            session=session,
-                            template_id=template_id,
-                            request=run_request,
-                            org_id=org_id,
-                            user_id=user_id
-                        )
+                    response = await execute_template_run(
+                        session=session,
+                        template_id=template_id,
+                        request=run_request,
+                        org_id=org_id,
+                        user_id=user_id
+                    )
                     
                     # Update run with batch information
                     from sqlalchemy import update

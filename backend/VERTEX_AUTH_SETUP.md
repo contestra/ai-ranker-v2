@@ -175,8 +175,15 @@ OpenAI concurrency **3** (stagger 15s; 429 backoff); Vertex direct **4**; Vertex
 
 ### Rate Limits
 - **OpenAI**: 30k TPM, max 3 concurrent, 15s stagger between starts
-- **Vertex**: 4 concurrent direct, 1 for SDK+proxy mode
-- **Timeouts**: Read 240s, Total 300s (OpenAI); 480s direct, 300s proxied (Vertex)
+- **Vertex**: 4 concurrent direct, 1 for SDK+proxy mode, 5s stagger recommended
+- **Timeouts**: 
+  - Ungrounded: 60s standard
+  - Grounded: 120s standard (up to 240s for complex)
+
+### Finalize Pass Configuration
+- **ALWAYS 6000 tokens** with streaming enabled
+- **Critical** when grounded runs return tool-only outputs
+- **Ensures** consistent output quality and prevents truncation
 
 ## Troubleshooting
 

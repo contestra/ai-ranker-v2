@@ -7,14 +7,12 @@ import os
 import time
 import json
 import logging
-import random
 import httpx
 from typing import Any, Dict, List, Optional
 from openai import AsyncOpenAI
 
 from app.llm.types import LLMRequest, LLMResponse
 from .grounding_detection_helpers import detect_openai_grounding
-from app.prometheus_metrics import inc_rate_limit as _inc_rl_metric
 
 # --- Proxy/vantage helpers (Webshare) ---
 def _normalize_cc(cc: str) -> str:
@@ -438,70 +436,46 @@ class OpenAIAdapter:
         logger.info(f"[LLM_ROUTE] {json.dumps(route_info)}")
         
         # Internal call function with error handling and timeout
-        
         async def _call(call_params):
-            """
-            Robust call with parameter sanitation, 429 backoff/retry, and timeout logging.
-            """
-            max_attempts = int(os.getenv("OPENAI_RETRY_MAX_ATTEMPTS", "5"))
-            base_backoff = float(os.getenv("OPENAI_BACKOFF_BASE_SECONDS", "2"))
-            attempt = 0
-            while True:
-                attempt += 1
-                try:
-                    client_with_timeout = _client_for_call.with_options(timeout=timeout)
-                    return await client_with_timeout.responses.create(
-                        **{k: v for k, v in call_params.items() if v is not None}
-                    )
-                except Exception as e:
-                    msg = str(e)
-                    low = msg.lower()
-                    # Parameter sanitation
-                    if "unexpected keyword argument" in msg or "unknown parameter" in low:
-                        import re
-                        m = re.search(r"'(\w+)'", msg)
-                        if m:
-                            bad_param = m.group(1)
-                            logger.info(f"Removing unsupported parameter: {bad_param}")
-                            call_params = dict(call_params)
-                            call_params.pop(bad_param, None)
-                            attempt -= 1
-                            continue
-                    # 429 backoff
-                    if "rate limit" in low or "429" in low or "quota" in low:
-                        try:
-                            _inc_rl_metric("openai")
-                        except Exception:
-                            pass
-                        if attempt >= max_attempts:
-                            raise RuntimeError(f"OPENAI_RATE_LIMIT_EXHAUSTED: {msg[:160]}") from e
-                        retry_after = None
-                        try:
-                            retry_after = getattr(e, "retry_after", None)
-                            if retry_after is not None:
-                                retry_after = float(retry_after)
-                        except Exception:
-                            retry_after = None
-                        backoff = retry_after if retry_after else base_backoff * (2 ** (attempt - 1))
-                        jitter = min(3.0, 0.2 * backoff) * random.random()
-                        await asyncio.sleep(backoff + jitter)
-                        continue
-                    is_timeout = "timeout" in low or "timed out" in low
-                    timeout_info = {
-                        "vendor": "openai",
-                        "model": request.model,
-                        "vantage_policy": vantage_policy,
-                        "proxy_mode": proxy_mode if proxy_mode else "direct",
-                        "country": country_code if country_code else "none",
-                        "grounded": request.grounded,
-                        "max_tokens": call_params.get("max_output_tokens", effective_tokens),
-                        "timeouts_s": {"connect": connect_s, "read": read_s, "total": total_s},
-                        "error_type": "timeout" if is_timeout else "error",
-                        "error_msg": msg[:200]
-                    }
-                    logger.error(f"[LLM_TIMEOUT] {json.dumps(timeout_info)}")
-                    raise RuntimeError(f"OPENAI_CALL_FAILED: {msg[:160]}") from e
-
+            try:
+                # Apply timeout to the client
+                client_with_timeout = _client_for_call.with_options(timeout=timeout)
+                return await client_with_timeout.responses.create(
+                    **{k: v for k, v in call_params.items() if v is not None}
+                )
+            except Exception as e:
+                error_msg = str(e)
+                # Handle unknown parameter errors by removing problematic params
+                if "unexpected keyword argument" in error_msg or "Unknown parameter" in error_msg:
+                    # Extract the problematic parameter name
+                    import re
+                    match = re.search(r"'(\w+)'", error_msg)
+                    if match:
+                        bad_param = match.group(1)
+                        logger.info(f"Removing unsupported parameter: {bad_param}")
+                        call_params = dict(call_params)
+                        call_params.pop(bad_param, None)
+                        # Retry without the bad parameter
+                        return await _client_for_call.responses.create(
+                            **{k: v for k, v in call_params.items() if v is not None}
+                        )
+                
+                # [LLM_TIMEOUT] Log timeout/error
+                is_timeout = "timeout" in str(e).lower() or "timed out" in str(e).lower()
+                timeout_info = {
+                    "vendor": "openai",
+                    "model": request.model,
+                    "vantage_policy": vantage_policy,
+                    "proxy_mode": proxy_mode if proxy_mode else "direct",
+                    "country": country_code if country_code else "none",
+                    "grounded": request.grounded,
+                    "max_tokens": call_params.get("max_output_tokens", effective_tokens),
+                    "timeouts_s": {"connect": connect_s, "read": read_s, "total": total_s},
+                    "error_type": "timeout" if is_timeout else "error",
+                    "error_msg": str(e)[:200]
+                }
+                logger.error(f"[LLM_TIMEOUT] {json.dumps(timeout_info)}")
+                raise RuntimeError(f"OPENAI_CALL_FAILED: {e}") from e
         
         # First attempt
         response = await _call(params)

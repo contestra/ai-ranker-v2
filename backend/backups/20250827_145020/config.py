@@ -78,18 +78,6 @@ class Settings(BaseSettings):
         description="Idempotency key TTL"
     )
     
-    # ------------------------------
-    # OpenAI Rate Limit & Concurrency
-    # ------------------------------
-    openai_max_concurrency: int = Field(3, description="Max concurrent OpenAI calls")
-    openai_stagger_seconds: int = Field(15, description="Stagger between OpenAI launches (seconds)")
-    openai_tpm_limit: int = Field(30000, description="OpenAI tokens per minute limit")
-    openai_tpm_headroom: float = Field(0.15, description="Headroom fraction to keep under TPM")
-    openai_est_tokens_per_run: int = Field(7000, description="Estimated tokens per OpenAI run (in+out)")
-    openai_retry_max_attempts: int = Field(5, description="Max attempts on 429 rate limit")
-    openai_backoff_base_seconds: int = Field(2, description="Base backoff seconds for 429 (exponential)")
-    finalize_lowers_concurrency: bool = Field(True, description="Drop concurrency when finalize bursts happen")
-
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
