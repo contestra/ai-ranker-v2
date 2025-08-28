@@ -18,6 +18,48 @@ CITATION_ANNOTATION_TYPES = {
     "url_citation", "web_result", "citation", "url", "reference"
 }
 
+def extract_openai_search_evidence(resp: Any) -> str:
+    """
+    Extract search evidence from OpenAI Responses object for synthesis fallback.
+    Returns a formatted string of search results (titles, URLs, snippets) to inject
+    into the synthesis call's input.
+    """
+    evidence_parts = []
+    
+    for item in _iter_output(resp):
+        itype = item.get("type", "") if isinstance(item, dict) else getattr(item, "type", "") or ""
+        
+        # Extract from web_search_result items
+        if itype == "web_search_result" and isinstance(item, dict):
+            result = item.get("result", {}) or item.get("content", {})
+            if isinstance(result, dict):
+                title = result.get("title", "").strip()
+                url = result.get("url", "").strip()  
+                snippet = result.get("snippet", "").strip()
+                
+                if title or url or snippet:
+                    evidence_parts.append(f"Source: {title} ({url}): {snippet}")
+        
+        # Extract from message content annotations  
+        content = item.get("content") if isinstance(item, dict) else getattr(item, "content", None)
+        if isinstance(content, list):
+            for blk in content:
+                anns = blk.get("annotations") if isinstance(blk, dict) else getattr(blk, "annotations", None)
+                if isinstance(anns, list):
+                    for a in anns:
+                        if isinstance(a, dict) and a.get("type") == "url_citation":
+                            url = a.get("url", "").strip()
+                            title = a.get("title", "").strip() or url
+                            if url:
+                                evidence_parts.append(f"Citation: {title} ({url})")
+    
+    if evidence_parts:
+        return (f"\n\nSearch evidence from web searches just performed:\n" + 
+                "\n".join(evidence_parts[:5]) +  # Limit to first 5 pieces of evidence
+                f"\n\nBased on the above search evidence, ")
+    
+    return ""
+
 def _iter_output(resp: Any) -> Iterable[Any]:
     """Safely iterate over response output items."""
     if hasattr(resp, "output") and resp.output is not None:
@@ -32,15 +74,18 @@ def _iter_output(resp: Any) -> Iterable[Any]:
         return resp.get("output", []) or []
     return []
 
-def detect_openai_grounding(resp: Any) -> Tuple[bool, int]:
+def detect_openai_grounding(resp: Any) -> Tuple[bool, int, bool, int]:
     """
-    Return (grounded_effective, tool_call_count) from an OpenAI Responses-style object/dict.
+    Return (grounded_effective, tool_call_count, web_grounded, web_search_count) from an OpenAI Responses-style object/dict.
     
     Detects:
-    - output[*].type in {web_search_call, web_search_result, tool_use, etc}
-    - URL citation annotations in message content blocks
+    - grounded_effective: ANY tool use (search, function calls, etc.)
+    - web_grounded: ONLY web search/citation evidence  
+    - tool_call_count: Total tool calls/functions used
+    - web_search_count: Web search calls specifically
     """
     grounded, tool_calls = False, 0
+    web_grounded, web_search_calls = False, 0
     output_types_seen = set()
     annotation_types_seen = set()
     
@@ -49,7 +94,7 @@ def detect_openai_grounding(resp: Any) -> Tuple[bool, int]:
         if itype:
             output_types_seen.add(itype)
         
-        # Enhanced tool/search call detection
+        # Detect ANY tool/function use for general grounded flag
         if (itype in SEARCH_TYPES or 
             ("search" in itype.lower()) or 
             ("tool" in itype.lower()) or
@@ -57,8 +102,14 @@ def detect_openai_grounding(resp: Any) -> Tuple[bool, int]:
             ("call" in itype.lower() and "web" in itype.lower())):
             tool_calls += 1
             grounded = True
+            
+            # Detect specifically WEB SEARCH for web grounding
+            if (itype in {"web_search_call", "web_search_result", "web_search", "web_search_preview_call", "web_search_preview_result"} or
+                ("web" in itype.lower() and "search" in itype.lower())):
+                web_search_calls += 1
+                web_grounded = True
 
-        # Enhanced URL-citation annotations detection
+        # Enhanced URL-citation annotations detection (counts as web grounding)
         content = item.get("content") if isinstance(item, dict) else getattr(item, "content", None)
         if isinstance(content, list):
             for blk in content:
@@ -73,14 +124,17 @@ def detect_openai_grounding(resp: Any) -> Tuple[bool, int]:
                             "url" in atype or "citation" in atype or "reference" in atype):
                             tool_calls += 1
                             grounded = True
+                            # URL citations are web evidence
+                            web_search_calls += 1 
+                            web_grounded = True
     
     # Wire-debug logging for detection improvement
     if output_types_seen or annotation_types_seen:
         import logging
         logger = logging.getLogger(__name__)
-        logger.debug(f"[OPENAI_GROUNDING] Output types: {output_types_seen}, Annotation types: {annotation_types_seen}, Grounded: {grounded}, Count: {tool_calls}")
+        logger.debug(f"[OPENAI_GROUNDING] Output types: {output_types_seen}, Annotation types: {annotation_types_seen}, Grounded: {grounded}, Count: {tool_calls}, Web grounded: {web_grounded}, Web count: {web_search_calls}")
     
-    return grounded, tool_calls
+    return grounded, tool_calls, web_grounded, web_search_calls
 
 # -----------------------------
 # Vertex / Gemini helper

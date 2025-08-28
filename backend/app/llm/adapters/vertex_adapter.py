@@ -672,7 +672,7 @@ Provide your response as valid JSON with appropriate keys for the information.""
         logger.info(
             f"Vertex completed in {latency_ms}ms, "
             f"grounded={is_grounded}, grounded_effective={metadata.get('grounded_effective', False)}, "
-            f"tool_calls={metadata.get('tool_call_count', 0)}, "
+            f"tool_calls={metadata.get('grounding_count', 0)}, "
             f"usage={usage}"
         )
         

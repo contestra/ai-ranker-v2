@@ -16,7 +16,7 @@ from openai import AsyncOpenAI
 
 from app.llm.types import LLMRequest, LLMResponse
 from app.llm.models import OPENAI_ALLOWED_MODELS, OPENAI_DEFAULT_MODEL, validate_model, normalize_model
-from .grounding_detection_helpers import detect_openai_grounding
+from .grounding_detection_helpers import detect_openai_grounding, extract_openai_search_evidence
 from app.core.config import get_settings
 from app.prometheus_metrics import (
     inc_rate_limit as _inc_rl_metric,
@@ -146,12 +146,21 @@ class _OpenAIRateLimiter:
                     self._grounded_ratios.pop(0)
                 logger.debug(f"[RL_ADAPTIVE] Grounded ratio {ratio:.2f} (history: {len(self._grounded_ratios)} samples)")
         
-        debt = max(0, actual_tokens - estimated_tokens)
-        if debt > 0:
-            # We underestimated - add debt
-            async with self._window_lock:
-                self._debt += debt
-                logger.info(f"[RL_DEBT] Underestimated by {debt} tokens (total debt: {self._debt})")
+        # Handle both underestimation (debt) and overestimation (credit)
+        difference = actual_tokens - estimated_tokens
+        
+        async with self._window_lock:
+            if difference > 0:
+                # We underestimated - add debt
+                self._debt += difference
+                logger.info(f"[RL_DEBT] Underestimated by {difference} tokens (total debt: {self._debt})")
+            elif difference < 0:
+                # We overestimated - apply credit (reduce current usage within the minute)
+                credit = abs(difference)
+                # Apply credit up to current usage, don't go negative
+                credit_applied = min(credit, self._tokens_used_this_minute)
+                self._tokens_used_this_minute -= credit_applied
+                logger.debug(f"[RL_CREDIT] Overestimated by {credit} tokens, applied {credit_applied} credit (usage now: {self._tokens_used_this_minute})")
     
     def get_grounded_multiplier(self):
         """Get adaptive multiplier for grounded calls based on history"""
@@ -449,17 +458,21 @@ class OpenAIAdapter:
         input_chars = sum(len(m.get("content", "")) for m in request.messages)
         estimated_input_tokens = input_chars // 4 + 100  # Add buffer for role/structure
         
-        # Output tokens from request
-        max_output_tokens = getattr(request, 'max_tokens', 2048)
-        
-        # Total estimate with safety margin
-        estimated_tokens = int((estimated_input_tokens + max_output_tokens) * 1.2)
-        
         # Initialize metadata early
         metadata = {
             "proxies_enabled": False,
             "proxy_mode": "disabled"
         }
+        
+        # Token configuration with environment defaults
+        DEFAULT_MAX = int(os.getenv("OPENAI_DEFAULT_MAX_OUTPUT_TOKENS", "6000"))
+        CAP = int(os.getenv("OPENAI_MAX_OUTPUT_TOKENS_CAP", "6000"))
+        
+        requested_tokens = request.max_tokens or DEFAULT_MAX
+        effective_tokens = max(PROVIDER_MIN_OUTPUT_TOKENS, min(CAP, requested_tokens))
+        
+        # Calculate token estimate using effective_tokens instead of requested
+        estimated_tokens = int((estimated_input_tokens + effective_tokens) * 1.2)
         
         # Add extra for grounded requests (search overhead) using adaptive multiplier
         if request.grounded:
@@ -470,16 +483,16 @@ class OpenAIAdapter:
         # Check TPM budget before acquiring slot
         # Also get auto-trim suggestion if budget is tight
         try:
-            should_trim, suggested_max = await _RL.await_tpm(estimated_tokens, max_output_tokens)
+            should_trim, suggested_max = await _RL.await_tpm(estimated_tokens, effective_tokens)
             
             # Apply auto-trim if needed and allowed
             if should_trim and suggested_max and os.getenv("OPENAI_AUTO_TRIM", "true").lower() == "true":
-                original_max = max_output_tokens
-                max_output_tokens = suggested_max
+                original_effective = effective_tokens
+                effective_tokens = suggested_max
                 metadata["auto_trimmed"] = True
-                metadata["auto_trim_original"] = original_max
+                metadata["auto_trim_original"] = original_effective
                 metadata["auto_trim_reduced"] = suggested_max
-                logger.info(f"[AUTO_TRIM] Reduced max_tokens from {original_max} to {suggested_max}")
+                logger.info(f"[AUTO_TRIM] Reduced max_tokens from {original_effective} to {suggested_max}")
         except Exception as _e:
             logger.warning(f"[RL_WARN] Rate limiting issue: {_e}")
             raise
@@ -503,16 +516,9 @@ class OpenAIAdapter:
         # Split messages properly for Responses API
         instructions, user_input = _split_messages(request.messages)
         
-        # Token configuration with environment defaults
-        DEFAULT_MAX = int(os.getenv("OPENAI_DEFAULT_MAX_OUTPUT_TOKENS", "6000"))
-        CAP = int(os.getenv("OPENAI_MAX_OUTPUT_TOKENS_CAP", "6000"))
-        
-        requested_tokens = request.max_tokens or DEFAULT_MAX
-        effective_tokens = max(PROVIDER_MIN_OUTPUT_TOKENS, min(CAP, requested_tokens))
-        
         # Build base parameters
         params: Dict[str, Any] = {
-            "model": request.model,
+            "model": model_name,  # Use normalized model instead of request.model
             "input": user_input,
             "max_output_tokens": effective_tokens,
         }
@@ -542,9 +548,10 @@ class OpenAIAdapter:
                 params["tool_choice"] = "auto"  # Allow model to decide
             
             # Add guardrail instruction to ensure final message after tools
+            max_web_searches = int(os.getenv("OPENAI_MAX_WEB_SEARCHES", "2"))
             grounding_instruction = (
                 "After finishing any tool calls, you MUST produce a final assistant message "
-                "containing the answer in plain text. Limit yourself to at most 2 web searches before answering."
+                f"containing the answer in plain text. Limit yourself to at most {max_web_searches} web searches before answering."
             )
             if instructions:
                 params["instructions"] = f"{instructions}\n\n{grounding_instruction}"
@@ -570,11 +577,13 @@ class OpenAIAdapter:
         retry_mode = "none"
         attempts = 0
         reasoning_only = False
-        metadata = {
+        
+        # Update metadata instead of overwriting it
+        metadata.update({
             "max_output_tokens_requested": requested_tokens,
             "max_output_tokens_effective": effective_tokens,
             "temperature_used": params.get("temperature"),
-        }
+        })
         
         # Configure timeouts
         connect_s = float(os.getenv("OPENAI_CONNECT_TIMEOUT_MS", "2000")) / 1000.0
@@ -584,7 +593,7 @@ class OpenAIAdapter:
         # [LLM_ROUTE] Log before API call
         route_info = {
             "vendor": "openai",
-            "model": request.model,
+            "model": model_name,  # Use normalized model
             "vantage_policy": vantage_policy or "NONE",
             "proxy_mode": proxy_mode or "direct",
             "country": country_code or "none",
@@ -658,7 +667,7 @@ class OpenAIAdapter:
                     is_timeout = "timeout" in low or "timed out" in low
                     timeout_info = {
                         "vendor": "openai",
-                        "model": request.model,
+                        "model": model_name,  # Use normalized model
                         "vantage_policy": vantage_policy,
                         "proxy_mode": "disabled",
                         "country": "none",
@@ -712,7 +721,7 @@ class OpenAIAdapter:
         
         # Detect grounding if tools were used
         if request.grounded:
-            grounded_effective, tool_call_count = self._detect_grounding(response)
+            grounded_effective, tool_call_count, web_grounded, web_search_count = self._detect_grounding(response)
             
             # REQUIRED mode enforcement
             if grounding_mode == "REQUIRED" and not grounded_effective:
@@ -859,14 +868,17 @@ class OpenAIAdapter:
                         metadata['why_no_content'] = 'no_message_items_after_tool_calls'
                         logger.warning("Grounding complete but no message - attempting synthesis step")
                         
-                        # Step 2: Synthesis-only request (no tools)
-                        # Use same token count as original request (ChatGPT recommendation: finalize_max_tokens = original_max_tokens)
+                        # Extract search evidence from the first response
+                        search_evidence = extract_openai_search_evidence(response)
+                        enhanced_input = user_input + search_evidence
+                        
+                        # Step 2: Synthesis-only request (no tools) with injected evidence
                         synthesis_params = {
-                            "model": request.model,
-                            "input": user_input,
+                            "model": model_name,  # Use normalized model
+                            "input": enhanced_input,  # Include search evidence
                             "instructions": (
-                                "Based on the web searches just performed, synthesize a final answer to the user's question. "
-                                "Provide a clear, concise response. Do not perform any additional searches."
+                                "Based on the search evidence provided above, give a direct answer "
+                                "to the user's question in plain text. Do not use any tools."
                             ),
                             "max_output_tokens": effective_tokens,  # Same as original (6000 in our case)
                             "temperature": params.get("temperature", 1.0),
@@ -955,11 +967,18 @@ class OpenAIAdapter:
         metadata['estimated_tokens'] = estimated_tokens
         metadata['actual_tokens'] = usage.get('total_tokens', 0)
         
+        # Add grounding signal metadata
+        if request.grounded:
+            metadata['grounded_effective'] = grounded_effective
+            metadata['tool_call_count'] = tool_call_count
+            metadata['web_grounded'] = web_grounded
+            metadata['web_search_count'] = web_search_count
+        
         # Debug logging for grounding
         if request.grounded:
             logger.info(
-                "OpenAI Grounding: requested=%s effective=%s tool_calls=%s shape=%s",
-                request.grounded, grounded_effective, tool_call_count,
+                "OpenAI Grounding: requested=%s effective=%s tool_calls=%s web_grounded=%s web_searches=%s shape=%s",
+                request.grounded, grounded_effective, tool_call_count, web_grounded, web_search_count,
                 metadata.get('shape_summary', {})
             )
         
@@ -968,7 +987,7 @@ class OpenAIAdapter:
         # [LLM_RESULT] Log successful response
         result_info = {
             "vendor": "openai",
-            "model": request.model,
+            "model": model_name,  # Use normalized model
             "vantage_policy": vantage_policy or "NONE",
             "proxy_mode": proxy_mode or "direct",
             "country": country_code or "none",
