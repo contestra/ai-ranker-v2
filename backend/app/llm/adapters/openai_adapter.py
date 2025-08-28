@@ -25,76 +25,10 @@ from app.prometheus_metrics import (
     inc_tpm_deferrals
 )
 
-# --- Proxy/vantage helpers (Webshare) ---
-def _normalize_cc(cc: str) -> str:
-    if not cc:
-        return "US"
-    cc = cc.strip().upper()
-    return "GB" if cc == "UK" else cc
-
-def _extract_country_from_request(req) -> str:
-    # Try several common spots; fall back to US
-    for attr in ("country_code", "country", "locale_country"):
-        val = getattr(req, attr, None)
-        if isinstance(val, str) and val.strip():
-            return _normalize_cc(val)
-    # Try nested dict-like fields commonly used for routing
-    for field in ("locale", "routing", "meta"):
-        obj = getattr(req, field, None)
-        if isinstance(obj, dict):
-            for k in ("country_code", "country", "cc"):
-                v = obj.get(k)
-                if isinstance(v, str) and v.strip():
-                    return _normalize_cc(v)
-    return "US"
-
-def _should_use_proxy(req) -> bool:
-    vp = getattr(req, "vantage_policy", None)
-    if not vp:
-        meta = getattr(req, "meta", {}) if hasattr(req, "meta") else {}
-        vp = meta.get("vantage_policy")
-    if not vp:
-        return False
-    # Handle both enum and string representations
-    vp_str = str(vp).upper().replace("VANTAGEPOLICY.", "")
-    return vp_str in ("PROXY_ONLY", "ALS_PLUS_PROXY")
-
-def _proxy_connection_mode(req) -> str:
-    # 'rotating' (default) or 'backbone'
-    # Use backbone for long responses (>2000 tokens) for stability
-    max_tokens = getattr(req, "max_tokens", 6000)
-    if max_tokens and max_tokens > 2000:
-        # Long responses need stable connections
-        default_mode = "backbone"
-    else:
-        # Short responses can use rotating
-        default_mode = "rotating"
-    
-    meta = getattr(req, "meta", None)
-    if not meta:
-        return default_mode
-    return str(meta.get("proxy_connection", default_mode)).lower()
-
-def _build_webshare_proxy_uri(country_code: str, mode: str = "rotating") -> Optional[str]:
-    """
-    Build an HTTP CONNECT proxy URI for Webshare.io using username suffixes:
-      Backbone: <USER>-CC
-      Rotating: <USER>-CC-rotate
-    """
-    user = os.getenv("WEBSHARE_USERNAME")
-    pwd = os.getenv("WEBSHARE_PASSWORD")
-    host = os.getenv("WEBSHARE_HOST", "p.webshare.io")
-    port = os.getenv("WEBSHARE_PORT", "80")
-    if not (user and pwd):
-        return None
-    cc = _normalize_cc(country_code)
-    # Webshare format: rotating uses -rotate, backbone uses numbered suffix
-    if mode == "rotating":
-        suffix = f"{user}-{cc}-rotate"
-    else:  # backbone
-        suffix = f"{user}-{cc}-1"  # Use -1 for stable backbone connection
-    return f"http://{suffix}:{pwd}@{host}:{port}"
-# --- end proxy helpers ---
+# --- Proxy support removed ---
+# All proxy functionality has been disabled via DISABLE_PROXIES=true
+# Locale/region is now handled via API parameters, not network egress
+# --- end proxy removal ---
 
 # Provider minimum output tokens requirement
 PROVIDER_MIN_OUTPUT_TOKENS = 16
@@ -491,58 +425,17 @@ class OpenAIAdapter:
             logger.warning(f"[RL_WARN] Rate limiting issue: {_e}")
             raise
         
-        # --- Per-run proxy wiring (Webshare) ---
-        _proxy_client = None
+        # Proxy support removed - using direct connection only
         _client_for_call = self.client
         
         # Initialize tracking variables for logging/telemetry
         vantage_policy = str(getattr(request, 'vantage_policy', 'NONE')).upper().replace("VANTAGEPOLICY.", "")
-        proxy_mode = None
-        country_code = _extract_country_from_request(request) if hasattr(request, 'country_code') else None
-        masked_proxy = None
-        connect_s, read_s, total_s = 30, 60, timeout  # Default timeouts
         
-        # Initialize metadata for error case
-        metadata = {}
-        
-        try:
-            proxy_needed = _should_use_proxy(request)
-            
-            # Increase timeout when using proxy
-            if proxy_needed:
-                timeout = max(timeout, 300)  # Ensure at least 300s for proxy requests
-            if proxy_needed:
-                country_code = _extract_country_from_request(request)
-                proxy_mode = _proxy_connection_mode(request)
-                _proxy_uri = _build_webshare_proxy_uri(country_code, proxy_mode)
-                if _proxy_uri:
-                    # Create masked proxy URL for logging
-                    from urllib.parse import urlsplit
-                    p = urlsplit(_proxy_uri)
-                    masked_proxy = f"{p.scheme}://{p.username}:***@{p.hostname}:{p.port or ''}"
-                    
-                    # Update timeout values for telemetry
-                    connect_s, read_s, total_s = 60, 240, 300
-                    
-                    # httpx uses 'proxy' not 'proxies'
-                    # Use extended timeouts for proxy connections
-                    # Long responses need much longer read timeouts
-                    proxy_timeout = httpx.Timeout(
-                        timeout=total_s,
-                        connect=connect_s,
-                        read=read_s,
-                        write=60.0      # Write timeout: 1 minute
-                    )
-                    _proxy_client = httpx.AsyncClient(proxy=_proxy_uri, timeout=proxy_timeout)
-                    # Build a per-run OpenAI client that uses the proxied transport
-                    _client_for_call = AsyncOpenAI(
-                        api_key=os.getenv('OPENAI_API_KEY'),
-                        timeout=300.0,  # Match the proxy client timeout
-                        http_client=_proxy_client,
-                    )
-        except Exception as _e:
-            logger.warning(f"Proxy setup failed; proceeding without proxy: {_e}")
-        # --- end proxy wiring ---
+        # Initialize metadata
+        metadata = {
+            "proxies_enabled": False,
+            "proxy_mode": "disabled"
+        }
         
         # Enforce model allowlist
         if request.model not in self.allowlist:
@@ -882,17 +775,15 @@ class OpenAIAdapter:
         metadata["had_text_after_retry"] = not _is_empty(content)
         metadata["response_format"] = params.get("response_format")
         
-        # Add proxy telemetry with standardized keys
-        if proxy_mode:
-            metadata["vantage_policy"] = vantage_policy
-            metadata["proxy_mode"] = proxy_mode
-            metadata["proxy_country"] = country_code if country_code else "none"
-            metadata["proxy_uri_masked"] = masked_proxy if masked_proxy else "none"
-            metadata["timeouts_s"] = {
-                "connect": connect_s,
-                "read": read_s,
-                "total": total_s
-            }
+        # Add telemetry with standardized keys
+        metadata["vantage_policy"] = vantage_policy
+        metadata["proxies_enabled"] = False
+        metadata["proxy_mode"] = "disabled"
+        metadata["timeouts_s"] = {
+            "connect": 30,
+            "read": 60,
+            "total": timeout
+        }
         
         # Add shape summary to metadata for debugging
         if request.grounded and hasattr(response, 'model_dump'):
@@ -948,12 +839,7 @@ class OpenAIAdapter:
                 metadata.get('shape_summary', {})
             )
         
-        # Close proxy client if created
-        if _proxy_client is not None:
-            try:
-                await _proxy_client.aclose()
-            except Exception:
-                pass
+        # No proxy clients to close anymore
         
         # [LLM_RESULT] Log successful response
         result_info = {
