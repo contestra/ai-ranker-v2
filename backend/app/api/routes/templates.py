@@ -350,18 +350,32 @@ async def batch_run_template(
             per_min_budget = int(s.openai_tpm_limit * (1.0 - float(s.openai_tpm_headroom)))
             
             if est_tokens > per_min_budget:
-                errors.service_unavailable(
-                    code="BATCH_RATE_LIMITED",
-                    detail="Projected OpenAI token usage exceeds per-minute budget",
-                    extra={
-                        "openai_runs": openai_runs,
-                        "est_tokens_per_run": int(s.openai_est_tokens_per_run),
-                        "est_total_tokens": est_tokens,
-                        "per_min_budget": per_min_budget,
-                        "tpm_limit": int(s.openai_tpm_limit),
-                        "headroom": float(s.openai_tpm_headroom),
-                        "suggested_wait_seconds": 60
-                    }
+                # Calculate Retry-After until next minute boundary
+                import time as _t
+                retry_after = int(max(1.0, 60.0 - (_t.time() % 60.0)))
+                
+                # Return 503 with Retry-After header
+                from fastapi import Response
+                from fastapi import status as http_status
+                import json
+                
+                return Response(
+                    status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
+                    content=json.dumps({
+                        'code': 'BATCH_RATE_LIMITED',
+                        'detail': f'Projected OpenAI token usage ({est_tokens}) exceeds per-minute budget ({per_min_budget})',
+                        'extra': {
+                            'openai_runs': openai_runs,
+                            'est_tokens_per_run': int(s.openai_est_tokens_per_run),
+                            'est_total_tokens': est_tokens,
+                            'per_min_budget': per_min_budget,
+                            'tpm_limit': int(s.openai_tpm_limit),
+                            'headroom': float(s.openai_tpm_headroom),
+                            'retry_after': retry_after
+                        }
+                    }),
+                    headers={'Retry-After': str(retry_after)},
+                    media_type='application/json'
                 )
     except Exception as _e:
         # Preflight is best-effort; continue if anything goes wrong

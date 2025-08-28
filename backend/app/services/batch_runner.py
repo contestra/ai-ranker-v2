@@ -5,6 +5,9 @@ Implements deterministic expansion and ALS integration
 
 import asyncio
 import hashlib
+import time
+import random
+from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Dict, List, Any, Optional
 from uuid import uuid4
@@ -163,6 +166,69 @@ class BatchRunner:
         }
         return compute_sha256(batch_data)
     
+    def _is_openai_model(self, model: str) -> bool:
+        """Check if model is from OpenAI"""
+        return model.lower().startswith(('gpt-', 'o1-', 'text-', 'davinci', 'curie', 'babbage', 'ada'))
+    
+    async def _await_openai_tpm_budget(self):
+        """Wait until TPM budget allows next request"""
+        async with self._tpm_lock:
+            current_minute = int(time.time() // 60)
+            
+            # Reset counter if we're in a new minute
+            if current_minute != self._tpm_window_minute:
+                self._tpm_window_minute = current_minute
+                self._tpm_used = 0
+            
+            # Check if we have budget
+            effective_limit = int(self._tpm_limit * (1 - self._tpm_headroom))
+            if self._tpm_used + self._tpm_est > effective_limit:
+                # Wait until next minute
+                inc_tpm_deferrals()
+                wait_seconds = 60 - (time.time() % 60) + random.uniform(0.1, 0.5)
+                await asyncio.sleep(wait_seconds)
+                
+                # Reset for new minute
+                self._tpm_window_minute = int(time.time() // 60)
+                self._tpm_used = 0
+            
+            # Reserve tokens
+            self._tpm_used += self._tpm_est
+    
+    async def _await_openai_launch_slot(self):
+        """Enforce stagger between OpenAI request launches"""
+        if self._stagger_seconds <= 0:
+            return
+            
+        async with self._slot_lock:
+            now = time.time()
+            if self._next_slot_epoch > now:
+                wait_time = self._next_slot_epoch - now
+                inc_stagger_delays()
+                await asyncio.sleep(wait_time)
+            
+            # Set next slot with jitter
+            self._next_slot_epoch = time.time() + self._stagger_seconds + random.uniform(0, 2)
+            set_openai_next_slot_epoch(self._next_slot_epoch)
+    
+    @asynccontextmanager
+    async def _openai_concurrency_context(self):
+        """Context manager for OpenAI concurrency tracking"""
+        await self._openai_sem.acquire()
+        
+        async with self._openai_active_lock:
+            self._openai_active += 1
+            set_openai_active_concurrency(self._openai_active)
+        
+        try:
+            yield
+        finally:
+            async with self._openai_active_lock:
+                self._openai_active -= 1
+                set_openai_active_concurrency(self._openai_active)
+            
+            self._openai_sem.release()
+    
     async def execute_batch(
         self,
         session: AsyncSession,
@@ -243,10 +309,11 @@ class BatchRunner:
                     )
                     
                     # Execute the run
-                    if self._is_openai_model(config["model"]):
+                    s = get_settings()
+                    if s.openai_gate_in_batch and self._is_openai_model(config["model"]):
                         await self._await_openai_tpm_budget()
                         await self._await_openai_launch_slot()
-                        async for _ in self._openai_concurrency_context():
+                        async with self._openai_concurrency_context():
                             response = await execute_template_run(
                                 session=session,
                                 template_id=template_id,

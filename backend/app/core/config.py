@@ -88,6 +88,13 @@ class Settings(BaseSettings):
     openai_est_tokens_per_run: int = Field(7000, description="Estimated tokens per OpenAI run (in+out)")
     openai_retry_max_attempts: int = Field(5, description="Max attempts on 429 rate limit")
     openai_backoff_base_seconds: int = Field(2, description="Base backoff seconds for 429 (exponential)")
+    
+    # ------------------------------
+    # OpenAI Gating Location
+    # ------------------------------
+    openai_gate_in_adapter: bool = Field(True,  description="Apply OpenAI rate limiting in adapter")
+    openai_gate_in_batch:   bool = Field(False, description="Apply OpenAI rate limiting in batch runner (legacy)")
+    
     finalize_lowers_concurrency: bool = Field(True, description="Drop concurrency when finalize bursts happen")
 
     class Config:

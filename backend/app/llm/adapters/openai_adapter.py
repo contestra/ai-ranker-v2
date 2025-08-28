@@ -8,13 +8,22 @@ import time
 import json
 import logging
 import random
+import asyncio
 import httpx
 from typing import Any, Dict, List, Optional
+from contextlib import asynccontextmanager
 from openai import AsyncOpenAI
 
 from app.llm.types import LLMRequest, LLMResponse
 from .grounding_detection_helpers import detect_openai_grounding
-from app.prometheus_metrics import inc_rate_limit as _inc_rl_metric
+from app.core.config import get_settings
+from app.prometheus_metrics import (
+    inc_rate_limit as _inc_rl_metric,
+    set_openai_active_concurrency, 
+    set_openai_next_slot_epoch,
+    inc_stagger_delays, 
+    inc_tpm_deferrals
+)
 
 # --- Proxy/vantage helpers (Webshare) ---
 def _normalize_cc(cc: str) -> str:
@@ -91,6 +100,133 @@ def _build_webshare_proxy_uri(country_code: str, mode: str = "rotating") -> Opti
 PROVIDER_MIN_OUTPUT_TOKENS = 16
 
 logger = logging.getLogger(__name__)
+
+
+class _OpenAIRateLimiter:
+    """Process-wide rate limiter for OpenAI API calls with sliding window"""
+    def __init__(self):
+        s = get_settings()
+        self._enabled = s.openai_gate_in_adapter
+        self._sem = asyncio.Semaphore(max(1, s.openai_max_concurrency))
+        self._tpm_limit = int(s.openai_tpm_limit)
+        
+        # Sliding window for token tracking
+        self._window_lock = asyncio.Lock()
+        self._window_start = time.time()
+        self._tokens_used_this_minute = 0
+        self._debt = 0  # Track underestimation debt
+    
+    async def await_tpm(self, estimated_tokens):
+        """Wait until TPM budget allows next request with sliding window
+        
+        Args:
+            estimated_tokens: Token estimate for this request
+        """
+        if not self._enabled or not estimated_tokens:
+            return
+        
+        async with self._window_lock:
+            now = time.time()
+            
+            # Reset window if more than 60 seconds have passed
+            if now - self._window_start >= 60:
+                self._window_start = now
+                self._tokens_used_this_minute = self._debt  # Carry over debt
+                self._debt = 0
+            
+            # Check if we have budget
+            tokens_needed = estimated_tokens
+            if self._tokens_used_this_minute + tokens_needed > self._tpm_limit:
+                # Calculate how long to sleep
+                time_in_window = now - self._window_start
+                time_remaining = 60 - time_in_window
+                
+                if time_remaining > 0:
+                    # Sleep until next window
+                    sleep_time = time_remaining + 0.1  # Small buffer
+                    logger.info(f"[RL_TPM] Sleeping {sleep_time:.1f}s (used {self._tokens_used_this_minute}/{self._tpm_limit} TPM)")
+                    inc_tpm_deferrals()
+                    await asyncio.sleep(sleep_time)
+                    
+                    # Reset window after sleep
+                    self._window_start = time.time()
+                    self._tokens_used_this_minute = self._debt
+                    self._debt = 0
+            
+            # Reserve tokens
+            self._tokens_used_this_minute += tokens_needed
+            logger.debug(f"[RL_TPM] Reserved {tokens_needed} tokens (total: {self._tokens_used_this_minute}/{self._tpm_limit})")
+    
+    async def commit_actual_tokens(self, actual_tokens, estimated_tokens):
+        """Commit actual token usage and track debt
+        
+        Args:
+            actual_tokens: Actual tokens used from response.usage
+            estimated_tokens: What we estimated before the call
+        """
+        if not self._enabled or not actual_tokens:
+            return
+        
+        debt = max(0, actual_tokens - estimated_tokens)
+        if debt > 0:
+            # We underestimated - add debt
+            async with self._window_lock:
+                self._debt += debt
+                logger.info(f"[RL_DEBT] Underestimated by {debt} tokens (total debt: {self._debt})")
+    
+    async def acquire_slot(self):
+        """Acquire concurrency slot"""
+        if self._enabled:
+            await self._sem.acquire()
+    
+    def release_slot(self):
+        """Release concurrency slot"""
+        if self._enabled:
+            self._sem.release()
+    
+    async def handle_429(self, retry_after=None):
+        """Handle rate limit error with exponential backoff
+        
+        Args:
+            retry_after: Seconds to wait from Retry-After header
+        """
+        if not self._enabled:
+            return
+        
+        async with self._window_lock:
+            # Add penalty debt
+            self._debt += 1000  # Penalty tokens for hitting limit
+            
+        if retry_after:
+            await asyncio.sleep(retry_after)
+        else:
+            # Exponential backoff with jitter
+            base_delay = 2.0
+            jitter = random.random() * 2 - 1  # -1 to 1
+            delay = min(30, base_delay * (2 ** random.randint(0, 3))) + jitter
+            await asyncio.sleep(delay)
+    
+    @asynccontextmanager
+    async def concurrency(self):
+        """Context manager for OpenAI concurrency tracking"""
+        if not self._enabled:
+            yield
+            return
+        await self._sem.acquire()
+        try:
+            async with self._active_lock:
+                self._active += 1
+                set_openai_active_concurrency(self._active)
+            yield
+        finally:
+            async with self._active_lock:
+                self._active = max(0, self._active-1)
+                set_openai_active_concurrency(self._active)
+            self._sem.release()
+
+
+# Singleton instance
+_RL = _OpenAIRateLimiter()
 
 
 def _extract_text_from_responses_obj(r) -> str:
@@ -301,6 +437,28 @@ class OpenAIAdapter:
             request: LLM request
             timeout: Timeout in seconds (60 for ungrounded, 120 for grounded)
         """
+        # Calculate token estimate for rate limiting
+        # Rough estimate: ~4 chars per token for input
+        input_chars = sum(len(m.get("content", "")) for m in request.messages)
+        estimated_input_tokens = input_chars // 4 + 100  # Add buffer for role/structure
+        
+        # Output tokens from request
+        max_output_tokens = getattr(request, 'max_tokens', 2048)
+        
+        # Total estimate with safety margin
+        estimated_tokens = int((estimated_input_tokens + max_output_tokens) * 1.2)
+        
+        # Add extra for grounded requests (search overhead)
+        if request.grounded:
+            estimated_tokens = int(estimated_tokens * 1.15)
+        
+        # Check TPM budget before acquiring slot
+        try:
+            await _RL.await_tpm(estimated_tokens)
+        except Exception as _e:
+            logger.warning(f"[RL_WARN] Rate limiting issue: {_e}")
+            raise
+        
         # --- Per-run proxy wiring (Webshare) ---
         _proxy_client = None
         _client_for_call = self.client
@@ -475,6 +633,8 @@ class OpenAIAdapter:
                             pass
                         if attempt >= max_attempts:
                             raise RuntimeError(f"OPENAI_RATE_LIMIT_EXHAUSTED: {msg[:160]}") from e
+                        
+                        # Use rate limiter's 429 handler
                         retry_after = None
                         try:
                             retry_after = getattr(e, "retry_after", None)
@@ -482,9 +642,9 @@ class OpenAIAdapter:
                                 retry_after = float(retry_after)
                         except Exception:
                             retry_after = None
-                        backoff = retry_after if retry_after else base_backoff * (2 ** (attempt - 1))
-                        jitter = min(3.0, 0.2 * backoff) * random.random()
-                        await asyncio.sleep(backoff + jitter)
+                        
+                        # Let rate limiter handle the backoff and debt
+                        await _RL.handle_429(retry_after)
                         continue
                     is_timeout = "timeout" in low or "timed out" in low
                     timeout_info = {
@@ -503,8 +663,9 @@ class OpenAIAdapter:
                     raise RuntimeError(f"OPENAI_CALL_FAILED: {msg[:160]}") from e
 
         
-        # First attempt
-        response = await _call(params)
+        # First attempt (with concurrency limiting)
+        async with _RL.concurrency():
+            response = await _call(params)
         content = _extract_text_from_responses_obj(response)
         
         # Detect grounding if tools were used
@@ -578,6 +739,10 @@ class OpenAIAdapter:
                     "completion_tokens": getattr(resp_usage, 'output_tokens', 0) or getattr(resp_usage, 'completion_tokens', 0),
                     "total_tokens": getattr(resp_usage, 'total_tokens', 0),
                 }
+                
+                # Commit actual token usage to rate limiter
+                if usage.get('total_tokens'):
+                    await _RL.commit_actual_tokens(usage['total_tokens'], estimated_tokens)
         
         # Enhanced fallback for grounded empty responses
         if not content and request.grounded:

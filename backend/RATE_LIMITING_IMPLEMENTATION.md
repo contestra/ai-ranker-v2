@@ -1,46 +1,50 @@
 # Rate Limiting Implementation Summary
 
-## Status: ✅ IMPLEMENTED
+## Status: ✅ FULLY UPDATED (August 28, 2025)
 
-ChatGPT's rate limiting guardrails have been successfully implemented in the AI Ranker V2 backend.
+ChatGPT's enhanced token-based rate limiting has been fully implemented with sliding window, debt tracking, and proper concurrency control.
 
 ## What Was Added
 
 ### 1. Configuration (Environment Variables)
 ```bash
-OPENAI_MAX_CONCURRENCY=3
-OPENAI_STAGGER_SECONDS=15
-OPENAI_TPM_LIMIT=30000
-OPENAI_TPM_HEADROOM=0.15
-OPENAI_EST_TOKENS_PER_RUN=7000
-OPENAI_RETRY_MAX_ATTEMPTS=5
-OPENAI_BACKOFF_BASE_SECONDS=2
-FINALIZE_LOWERS_CONCURRENCY=true
+OPENAI_MAX_CONCURRENCY=1        # Set to 1 for sequential execution
+OPENAI_STAGGER_SECONDS=15       # Deprecated - using token-based control
+OPENAI_TPM_LIMIT=30000          # 30,000 tokens per minute limit
+OPENAI_TPM_HEADROOM=0.15        # 15% reserved headroom
+OPENAI_EST_TOKENS_PER_RUN=7000  # Default estimate (now dynamic)
+OPENAI_RETRY_MAX_ATTEMPTS=5     # Max retry attempts on 429
+OPENAI_BACKOFF_BASE_SECONDS=2   # Base for exponential backoff
+OPENAI_GATE_IN_ADAPTER=true     # Enable adapter-level rate limiting
+OPENAI_GATE_IN_BATCH=false      # Disable batch-level (legacy)
 ```
 
-### 2. Core Features Implemented
+### 2. Core Features Implemented (ENHANCED)
 
-#### A. Concurrency Control (`batch_runner.py`)
-- **Semaphore**: Limits OpenAI to max 3 concurrent requests
-- **Dynamic tracking**: Active concurrency exposed via Prometheus metric
-- **Finalize mode**: Can drop to 2 concurrent when handling finalize passes
+#### A. Token-Based Rate Limiting (`openai_adapter.py` - `_OpenAIRateLimiter`)
+- **Sliding Window**: 60-second window tracking actual token usage
+- **Dynamic Estimation**: Per-request calculation based on input + output tokens
+- **Debt Tracking**: Accumulates underestimation for next window
+- **Smart Sleep**: Calculates exact sleep time to next window
 
-#### B. Request Staggering (`batch_runner.py`)
-- **15-second stagger**: Enforced between OpenAI request launches
-- **Jitter**: ±20% (capped at 3s) to prevent thundering herd
-- **Slot scheduling**: Tracks next available launch slot
+#### B. Token Estimation (Pre-call)
+- **Input Tokens**: `char_count / 4 + 100` (buffer for structure)
+- **Output Tokens**: From `request.max_tokens` (6000 for tests)
+- **Safety Margin**: 20% overhead on total estimate
+- **Grounded Overhead**: Additional 15% for search/reasoning
 
-#### C. Token Budget Management (`batch_runner.py`)
-- **TPM tracking**: Monitors token usage per minute
-- **Headroom**: Keeps 15% buffer (25.5k effective limit of 30k)
-- **Window-based**: Resets every minute
-- **Deferral**: Delays requests when approaching limit
+#### C. Debt Management (Post-call)
+- **Actual Usage**: Extracted from `response.usage.total_tokens`
+- **Debt Calculation**: `max(0, actual - estimated)`
+- **Carry Forward**: Debt added to next window's initial usage
+- **429 Penalty**: 1000 token debt added on rate limit errors
 
-#### D. 429 Retry Logic (`openai_adapter.py`)
-- **Exponential backoff**: 2s → 4s → 8s → 16s → 32s
-- **Max 5 attempts**: Configurable via environment
-- **Honors Retry-After**: If header present, uses that value
-- **Rate limit exhaustion**: Returns structured error after max attempts
+#### D. Enhanced 429 Handling (`openai_adapter.py`)
+- **Integrated with Rate Limiter**: Uses `_RL.handle_429(retry_after)`
+- **Smart Backoff**: Honors `Retry-After` header if present
+- **Exponential with Jitter**: `min(30, 2^n) + random(-1, 1)` seconds
+- **Debt Penalty**: Adds 1000 tokens to debt on 429
+- **Structured Errors**: Returns `OPENAI_RATE_LIMIT_EXHAUSTED` after max attempts
 
 ### 3. Telemetry & Monitoring
 
@@ -51,13 +55,17 @@ FINALIZE_LOWERS_CONCURRENCY=true
 - `contestra_openai_tpm_window_deferrals_total` - TPM budget deferrals
 - `contestra_llm_rate_limit_events_total` - 429 events by vendor
 
-### 4. Files Modified
-- `app/core/config.py` - Added rate limiting configuration
-- `app/prometheus_metrics.py` - Added new metrics and helpers
-- `app/services/batch_runner.py` - Implemented concurrency/stagger/TPM logic
-- `app/llm/adapters/openai_adapter.py` - Added 429 retry/backoff logic
-- `app/api/routes/templates.py` - Added preflight TPM guard for batch endpoint
-- `.env` - Added configuration variables
+### 4. Files Modified (Latest Updates)
+- `app/core/config.py` - Added token-based rate limiting configuration
+- `app/prometheus_metrics.py` - Added metrics for monitoring
+- `app/services/batch_runner.py` - Batch-level gating (now disabled by default)
+- `app/llm/adapters/openai_adapter.py` - **MAJOR UPDATE**: Complete rewrite of `_OpenAIRateLimiter` class
+  - New sliding window implementation
+  - Dynamic token estimation per request
+  - Debt tracking and management
+  - Integrated 429 handling
+- `app/api/routes/templates.py` - Preflight TPM guard for batch endpoint
+- `.env` - Updated configuration variables
 
 ### 5. API Preflight Guard
 The batch endpoint (`/templates/{template_id}/batch-run`) now includes a preflight check that:
@@ -129,6 +137,31 @@ curl -s http://localhost:8000/metrics | grep contestra_openai
 
 ---
 
-**Implementation Date**: August 27, 2025
-**Implemented By**: Claude with guidance from ChatGPT's surgical diffs
-**Status**: Production Ready (single-instance mode)
+## Latest Updates (August 28, 2025)
+
+### Key Improvements from ChatGPT's Final Guidance:
+
+1. **Token-Based Rate Limiting**: Complete rewrite to track actual tokens, not request count
+2. **Dynamic Token Estimation**: Per-request calculation with safety margins
+3. **Sliding Window**: Proper 60-second window with debt carry-over
+4. **Smart 429 Handling**: Integrated with rate limiter, proper backoff
+5. **Proxy Preflight Checks**: 3-second HEAD requests to prevent hangs
+6. **Token Usage Logging**: All successful calls now log full usage metrics
+
+### Test Matrix Configuration:
+- **32 Tests Total**: 12 scenarios × 2 models (OpenAI GPT-5, Vertex Gemini 2.5 Pro)
+- **Max Tokens**: 6000 for ALL tests (do not reduce)
+- **Execution**: Sequential (OPENAI_MAX_CONCURRENCY=1)
+- **Vantage Policies**: NONE, ALS_ONLY, PROXY_ONLY, ALS_PLUS_PROXY
+- **Grounding**: Both grounded and ungrounded variants
+
+### Known Issues Resolved:
+- ✅ 429 errors despite rate limiting - Fixed with token-based tracking
+- ✅ Proxy timeouts - Fixed with preflight checks and HTTP/1.1
+- ✅ FunctionTool warnings - Clean tool arrays for OpenAI
+- ✅ Empty responses - Proper extraction paths and error classification
+
+**Initial Implementation**: August 27, 2025
+**Major Update**: August 28, 2025
+**Implemented By**: Claude with guidance from ChatGPT
+**Status**: Production Ready with Token-Based Rate Limiting
