@@ -1,504 +1,395 @@
+"""
+Vertex AI adapter for Gemini 2.5-pro ONLY.
+Uses Vertex AI SDK (google-cloud-aiplatform), NOT google.genai.
+Implements two-step grounded JSON policy as required.
+"""
 import json
 import os
 import time
 import logging
 import asyncio
-from typing import Any, Dict, List
+import hashlib
+from typing import Any, Dict, List, Optional
+
 import vertexai
-from vertexai.generative_models import GenerativeModel, GenerationConfig, Tool, grounding
+from vertexai import generative_models as gm
 from starlette.concurrency import run_in_threadpool
 
 from app.llm.types import LLMRequest, LLMResponse
+from app.llm.models import VERTEX_ALLOWED_MODELS, VERTEX_DEFAULT_MODEL, validate_model
 from .grounding_detection_helpers import detect_vertex_grounding
-
-# --- Proxy support removed ---
-# All proxy functionality has been disabled via DISABLE_PROXIES=true
-# Locale/region is now handled via API parameters, not network egress
-# --- end proxy removal ---
 
 logger = logging.getLogger(__name__)
 
-def _extract_vertex_usage(resp: Any) -> Dict[str, int]:
-    """Return prompt/completion/total token counts, defaulting to 0."""
-    usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+# Force the ONLY allowed model - no rewrites or variants
+GEMINI_MODEL = "publishers/google/models/gemini-2.5-pro"
 
-    # 1) Newer Generative API: resp.usage_metadata is an object with attributes
+class GroundingRequiredError(Exception):
+    """Raised when grounding is REQUIRED but not achieved"""
+    pass
+
+def _extract_vertex_usage(resp: Any) -> Dict[str, int]:
+    """Extract token usage from Vertex response."""
+    usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    
     meta = getattr(resp, "usage_metadata", None)
     if meta:
-        for src, dst in [
-            ("prompt_token_count", "prompt_tokens"),
-            ("candidates_token_count", "completion_tokens"),
-            ("total_token_count", "total_tokens"),
-        ]:
-            val = getattr(meta, src, None)
-            if val:
-                usage[dst] = int(val)
-
-    # 2) Older LLM API: resp._prediction_response has a 'metadata' dict
-    #    with 'tokenMetadata' containing 'inputTokenCount' / 'outputTokenCount'
-    pred_resp = getattr(resp, "_prediction_response", None)
-    if pred_resp:
-        pred_meta = getattr(pred_resp, "metadata", {})
-        token_data = pred_meta.get("tokenMetadata", {})
-        inp = token_data.get("inputTokenCount", {})
-        out = token_data.get("outputTokenCount", {})
-
-        input_tokens = 0
-        if isinstance(inp, dict):
-            input_tokens = inp.get("totalTokens", 0)
-        elif isinstance(inp, int):
-            input_tokens = inp
-
-        output_tokens = 0
-        if isinstance(out, dict):
-            output_tokens = out.get("totalTokens", 0)
-        elif isinstance(out, int):
-            output_tokens = out
-
-        if input_tokens or output_tokens:
-            usage["prompt_tokens"] = input_tokens
-            usage["completion_tokens"] = output_tokens
-            usage["total_tokens"] = input_tokens + output_tokens
-
+        usage["prompt_tokens"] = getattr(meta, "prompt_token_count", 0)
+        usage["completion_tokens"] = getattr(meta, "candidates_token_count", 0) 
+        usage["total_tokens"] = getattr(meta, "total_token_count", 0)
+    
     return usage
 
-
 def _extract_text_from_candidates(resp: Any) -> str:
-    """Return the concatenated text from resp.candidates or resp.text, defaulting to ''."""
+    """Extract text from Vertex response candidates."""
+    try:
+        # Try the standard path first
+        if hasattr(resp, "candidates") and resp.candidates:
+            candidate = resp.candidates[0]
+            if hasattr(candidate, "content") and hasattr(candidate.content, "parts"):
+                parts = candidate.content.parts
+                if parts and hasattr(parts[0], "text"):
+                    return parts[0].text
+        
+        # Fallback to text property (may raise ValueError)
+        if hasattr(resp, "text"):
+            try:
+                return resp.text
+            except ValueError as e:
+                # Handle safety filters or empty response
+                logger.warning(f"Could not extract text: {e}")
+                return ""
+    except Exception as e:
+        logger.warning(f"Error extracting text from response: {e}")
     
-    # First, try resp.text (simple shortcut)
-    if hasattr(resp, 'text'):
-        try:
-            txt = resp.text  # This may raise on safety filters
-            if txt:
-                return txt.strip()
-        except Exception as e:
-            # Log safety filter or other errors
-            logger.warning(f"Failed to get resp.text: {e}")
-
-    # Second, try to collect from all candidates
-    collected = []
-    candidates = getattr(resp, 'candidates', [])
-    for candidate in candidates:
-        # Try candidate.text (newer API)
-        if hasattr(candidate, 'text'):
-            txt = getattr(candidate, 'text', '')
-            if txt:
-                collected.append(txt)
-            continue
-            
-        # Try candidate.content.parts (current API)
-        if hasattr(candidate, 'content'):
-            content = candidate.content
-            if hasattr(content, 'parts'):
-                for part in content.parts:
-                    if hasattr(part, 'text'):
-                        txt = getattr(part, 'text', '')
-                        if txt:
-                            collected.append(txt)
-
-    if collected:
-        return "\n".join(collected).strip()
-
-    # No text found
     return ""
 
+def _sha256_text(text: str) -> str:
+    """Generate SHA256 hash of text for attestation."""
+    return hashlib.sha256(text.encode()).hexdigest()
 
 class VertexAdapter:
     """
-    Vertex AI adapter for Gemini models with grounding support.
-    Proxies have been disabled - all requests go direct.
+    Vertex AI adapter using ONLY publishers/google/models/gemini-2.5-pro.
+    Implements two-step grounded JSON policy.
     """
     
     def __init__(self):
-        # Initialize Vertex AI with project and location from env
-        self.project = os.getenv("GOOGLE_CLOUD_PROJECT", "contestra-ai")
+        """Initialize Vertex AI with project and location."""
+        self.project = os.getenv("GOOGLE_CLOUD_PROJECT", os.getenv("VERTEX_PROJECT_ID"))
         self.location = os.getenv("VERTEX_LOCATION", "europe-west4")
         
-        # Initialize once for the process
+        if not self.project:
+            raise RuntimeError(
+                "GOOGLE_CLOUD_PROJECT or VERTEX_PROJECT_ID required - set in backend/.env"
+            )
+        
+        # Initialize Vertex AI
         vertexai.init(project=self.project, location=self.location)
-        
-        # Model allowlist
-        self.allowlist = {
-            # Newer models with grounding support
-            "gemini-2.5-pro",
-            "gemini-2.0-flash-exp",
-            "gemini-exp-1206",
-            # Legacy models (may not support grounding)
-            "gemini-1.5-pro",
-            "gemini-1.5-flash",
-            "gemini-1.0-pro",
-            "gemini-pro",
-        }
-        
-        logger.info("Vertex adapter initialized: project=%s location=%s", self.project, self.location)
-        # Ensure metadata endpoints are never proxied (safe on any platform)
-        os.environ.setdefault("NO_PROXY", "metadata.google.internal,169.254.169.254,localhost,127.0.0.1")
+        logger.info(f"Vertex adapter initialized: project={self.project}, location={self.location}")
     
-    def _is_structured_output(self, req) -> bool:
-        """Check if request wants JSON/structured output"""
-        # Check response_format
-        rf = getattr(req, 'response_format', None)
-        if rf and isinstance(rf, dict):
-            if rf.get('type') == 'json_object':
-                return True
-        # Check messages for JSON instruction
-        messages = getattr(req, 'messages', [])
+    def _build_content_with_als(self, messages: List[Dict], als_block: str = None) -> List[gm.Content]:
+        """
+        Build Vertex Content objects from messages.
+        Combines system + ALS + user into single user message.
+        MUST use vertexai.generative_models types, NOT google.genai.
+        """
+        contents = []
+        combined_text = []
+        
         for msg in messages:
-            content = msg.get('content', '').lower()
-            if 'json' in content and ('format' in content or 'output' in content):
-                return True
-        return False
+            role = msg.get("role", "user")
+            text = msg.get("content", "")
+            
+            if not text:
+                continue
+            
+            # Combine system and user messages into single user message
+            if role in ["system", "user"]:
+                # For first user message, prepend ALS if provided
+                if role == "user" and als_block and not combined_text:
+                    combined_text.append(als_block)
+                combined_text.append(text)
+            elif role == "assistant":
+                # First, add any accumulated user text
+                if combined_text:
+                    # System → ALS → User ordering
+                    user_part = gm.Part.from_text("\n\n".join(combined_text))
+                    user_content = gm.Content(role="user", parts=[user_part])
+                    contents.append(user_content)
+                    combined_text = []
+                
+                # Then add assistant message as model role
+                assistant_part = gm.Part.from_text(text)
+                assistant_content = gm.Content(role="model", parts=[assistant_part])
+                contents.append(assistant_content)
+        
+        # Add any remaining user text
+        if combined_text:
+            user_part = gm.Part.from_text("\n\n".join(combined_text))
+            user_content = gm.Content(role="user", parts=[user_part])
+            contents.append(user_content)
+        
+        return contents
     
-    def _create_generation_config(self, req: LLMRequest) -> GenerationConfig:
-        """Create generation config from request parameters"""
-        config_dict = {}
-        
-        # Map common parameters
-        if hasattr(req, 'temperature') and req.temperature is not None:
-            config_dict['temperature'] = float(req.temperature)
-        if hasattr(req, 'max_tokens') and req.max_tokens:
-            config_dict['max_output_tokens'] = int(req.max_tokens)
-        if hasattr(req, 'top_p') and req.top_p is not None:
-            config_dict['top_p'] = float(req.top_p)
-        
-        # Handle structured output
-        if self._is_structured_output(req):
-            config_dict['response_mime_type'] = 'application/json'
-            logger.info("Vertex: Structured output requested, setting response_mime_type=application/json")
-        
-        return GenerationConfig(**config_dict) if config_dict else None
-    
-    def _create_grounding_tools(self) -> List[Tool]:
-        """Create grounding tools for Google Search"""
-        try:
-            google_search_tool = Tool.from_google_search_retrieval(
-                google_search_retrieval=grounding.GoogleSearchRetrieval()
-            )
-            return [google_search_tool]
-        except Exception as e:
-            logger.warning(f"Failed to create grounding tools: {e}")
-            return []
-    
-    async def _complete_with_genai(self, req: LLMRequest, timeout: int = 60) -> LLMResponse:
-        """Complete using Google GenAI SDK with grounding support (proxies disabled)"""
-        from google import genai
-        from google.genai.types import GenerateContentConfig, GoogleSearch, Tool as GenAITool, HttpOptions
-        
-        t0 = time.perf_counter()
-        
-        # Initialize tracking variables for logging/telemetry
-        vantage_policy = str(getattr(req, 'vantage_policy', 'NONE')).upper().replace("VANTAGEPOLICY.", "")
-        metadata = {
-            "proxies_enabled": False,
-            "proxy_mode": "disabled"
+    def _create_generation_config_step1(self, req: LLMRequest) -> gm.GenerationConfig:
+        """Create generation config for Step 1 (grounded, NO JSON)."""
+        config_dict = {
+            "temperature": getattr(req, "temperature", 0.7),
+            "top_p": getattr(req, "top_p", 0.95),
+            "max_output_tokens": getattr(req, "max_tokens", 6000),
         }
-        
-        # Build HTTP options without proxy
-        http_options = HttpOptions(api_version="v1")
-        
-        # [LLM_ROUTE] Log before API call
-        route_info = {
-            "vendor": "vertex_genai",
-            "model": getattr(req, "model", "gemini-2.5-pro"),
-            "vantage_policy": vantage_policy,
-            "proxy_mode": "disabled",
-            "grounded": req.grounded,
-            "max_tokens": getattr(req, "max_tokens", 6000),
-            "timeouts_s": {"connect": 30, "read": 60, "total": timeout}
-        }
-        logger.info(f"[LLM_ROUTE] {json.dumps(route_info)}")
-        
-        # Create GenAI client with custom HTTP options
-        try:
-            client = genai.Client(
-                vertexai=True,
-                project=self.project,
-                location=self.location,
-                http_options=http_options
-            )
-        finally:
-            # No proxy env vars to clean up anymore
-            pass
-        
-        # Get model name
-        raw_model = getattr(req, "model", None) or "gemini-2.5-pro"
-        model_name = raw_model.replace("gemini-2.5", "gemini-2.0") if "gemini-2.5" in raw_model else raw_model
-        
-        # Build generation config
-        config = GenerateContentConfig(
-            temperature=getattr(req, "temperature", 0.7),
-            top_p=getattr(req, "top_p", 0.95),
-            max_output_tokens=getattr(req, "max_tokens", 6000),
-            response_modalities=["TEXT"]
+        # Step 1: NO response_mime_type - we want prose with citations
+        return gm.GenerationConfig(**config_dict)
+    
+    def _create_generation_config_step2_json(self) -> gm.GenerationConfig:
+        """Create generation config for Step 2 (JSON reshape, NO tools)."""
+        return gm.GenerationConfig(
+            temperature=0.1,  # Low temp for consistent JSON
+            max_output_tokens=6000,
+            response_mime_type="application/json"  # JSON only in Step 2
         )
-        
-        # Handle structured output
-        is_structured = self._is_structured_output(req)
-        if is_structured:
-            config.response_mime_type = "application/json"
-            logger.info("GenAI: Structured output requested, setting response_mime_type=application/json")
-        
-        # Build contents from messages
-        contents = []
-        for msg in req.messages:
-            role = msg.get("role", "user")
-            text = msg.get("content", "")
-            if text:
-                # GenAI SDK expects "user" or "model" roles
-                if role == "system":
-                    # Prepend system message to first user message
-                    if contents and contents[0].get("role") == "user":
-                        contents[0]["parts"][0]["text"] = f"{text}\n\n{contents[0]['parts'][0]['text']}"
-                    else:
-                        contents.insert(0, {"role": "user", "parts": [{"text": text}]})
-                elif role == "assistant":
-                    contents.append({"role": "model", "parts": [{"text": text}]})
-                else:  # user
-                    contents.append({"role": "user", "parts": [{"text": text}]})
-        
-        # Build tools for grounding if requested
-        tools = []
-        if req.grounded:
-            # IMPORTANT: JSON output and grounding cannot be used together
-            if is_structured:
-                logger.warning("Vertex GenAI: Cannot use grounding with structured output - disabling grounding")
-                req.grounded = False
-            else:
-                google_search_tool = GenAITool(google_search=GoogleSearch())
-                tools.append(google_search_tool)
-                logger.info("GenAI grounding enabled with GoogleSearch tool")
-        
-        try:
-            # Call the API with timeout
-            response = await asyncio.wait_for(
-                client.aio.models.generate_content(
-                    model=model_name,
-                    contents=contents,
-                    config=config,
-                    tools=tools if tools else None
-                ),
-                timeout=timeout
-            )
-            
-            # Extract text and usage
-            text = _extract_text_from_candidates(response)
-            usage = _extract_vertex_usage(response)
-            
-            # Check if grounding was actually used
-            grounded_effective = detect_vertex_grounding(response) if req.grounded else False
-            
-            # Populate metadata
-            metadata["vantage_policy"] = vantage_policy
-            metadata["proxies_enabled"] = False
-            metadata["proxy_mode"] = "disabled"
-            metadata["timeouts_s"] = {
-                "connect": 30,
-                "read": 60,
-                "total": timeout
-            }
-            
-            # [LLM_RESULT] Log successful response
-            result_info = {
-                "vendor": "vertex_genai",
-                "model": model_name,
-                "vantage_policy": vantage_policy,
-                "proxy_mode": "disabled",
-                "grounded": req.grounded,
-                "grounded_effective": grounded_effective,
-                "latency_ms": int((time.perf_counter() - t0) * 1000),
-                "usage": usage,
-                "content_length": len(text) if text else 0
-            }
-            logger.info(f"[LLM_RESULT] {json.dumps(result_info)}")
-            
-            return LLMResponse(
-                content=text,
-                model_version=model_name,
-                model_fingerprint=f"vertex-genai-{model_name}",
-                grounded_effective=grounded_effective,
-                usage=usage,
-                latency_ms=int((time.perf_counter() - t0) * 1000),
-                raw_response=response,
-                metadata=metadata
-            )
-            
-        except asyncio.TimeoutError:
-            logger.error(f"GenAI timeout after {timeout}s")
-            # [LLM_RESULT] Log timeout
-            result_info = {
-                "vendor": "vertex_genai",
-                "model": model_name,
-                "vantage_policy": vantage_policy,
-                "proxy_mode": "disabled",
-                "grounded": req.grounded,
-                "grounded_effective": False,
-                "latency_ms": int((time.perf_counter() - t0) * 1000),
-                "error": f"TIMEOUT after {timeout}s",
-                "content_length": 0
-            }
-            logger.info(f"[LLM_RESULT] {json.dumps(result_info)}")
-            raise
     
-    async def complete(self, req: LLMRequest, timeout: int = 60) -> LLMResponse:
-        """Main entry point for Vertex adapter with proxy support removed"""
+    async def _step1_grounded(self, model: gm.GenerativeModel, contents: List[gm.Content], 
+                             generation_config: gm.GenerationConfig, timeout: int, 
+                             mode: str = "AUTO") -> tuple[Any, bool, int]:
+        """
+        Step 1: Generate grounded response with GoogleSearch tool.
+        Returns (response, grounded_effective, tool_call_count).
+        """
+        # Create GoogleSearch tool for grounding
+        tools = [gm.Tool.from_google_search_retrieval()]
         
-        # Determine if we need the GenAI SDK path
-        use_genai = os.getenv("GOOGLE_GENAI_USE_VERTEXAI", "false").lower() == "true"
-        
-        # Route to GenAI SDK if grounding (proxies no longer supported)
-        if use_genai and req.grounded:
-            logger.info("Using Google GenAI SDK for grounded request")
-            return await self._complete_with_genai(req, timeout)
-        
-        # Use standard Vertex SDK path (no proxy support)
-        t0 = time.perf_counter()
-        
-        # Initialize tracking variables for logging/telemetry
-        vantage_policy = str(getattr(req, 'vantage_policy', 'NONE')).upper().replace("VANTAGEPOLICY.", "")
-        metadata = {
-            "proxies_enabled": False,
-            "proxy_mode": "disabled"
-        }
-        
-        # Get model name
-        raw_model = getattr(req, "model", None) or "gemini-1.5-pro"
-        # Handle model name normalization
-        model_name = raw_model
-        if "gemini-2.5" in raw_model:
-            model_name = raw_model.replace("gemini-2.5", "gemini-2.0")
-            logger.info(f"Normalized model name: {raw_model} -> {model_name}")
-        
-        # [LLM_ROUTE] Log before API call
-        route_info = {
-            "vendor": "vertex",
-            "model": model_name,
-            "vantage_policy": vantage_policy,
-            "proxy_mode": "disabled",
-            "grounded": req.grounded,
-            "max_tokens": getattr(req, "max_tokens", 6000),
-            "timeouts_s": {"connect": 30, "read": 60, "total": timeout}
-        }
-        logger.info(f"[LLM_ROUTE] {json.dumps(route_info)}")
-        
-        # Create model
-        model = GenerativeModel(model_name)
-        
-        # Create generation config
-        generation_config = self._create_generation_config(req)
-        
-        # Build contents from messages
-        contents = []
-        for msg in req.messages:
-            role = msg.get("role", "user")
-            text = msg.get("content", "")
-            if text:
-                # Vertex expects "user" or "model" roles
-                if role == "system":
-                    # Prepend system message to first user message
-                    if contents and contents[0]["role"] == "user":
-                        contents[0]["parts"][0].text = f"{text}\n\n{contents[0]['parts'][0].text}"
-                    else:
-                        contents.insert(0, {"role": "user", "parts": [text]})
-                elif role == "assistant":
-                    contents.append({"role": "model", "parts": [text]})
-                else:  # user
-                    contents.append({"role": "user", "parts": [text]})
-        
-        # Create grounding tools if requested
-        tools = []
-        is_structured = self._is_structured_output(req)
-        
-        if req.grounded:
-            # Check for incompatible combination
-            if is_structured:
-                logger.warning("Vertex: Cannot use grounding with structured output (JSON mode) - disabling grounding")
-                req.grounded = False
-            else:
-                tools = self._create_grounding_tools()
-                if tools:
-                    logger.info("Vertex grounding enabled with %d tool(s)", len(tools))
-        
-        # Call Vertex with timeout (no proxy context needed)
         try:
-            # Enforce per-call timeout via asyncio
-            resp = await asyncio.wait_for(
+            response = await asyncio.wait_for(
                 run_in_threadpool(
                     model.generate_content,
                     contents=contents,
                     generation_config=generation_config,
-                    tools=tools if tools else None
+                    tools=tools
                 ),
                 timeout=timeout
             )
+            
+            # Check if grounding was actually used
+            grounded_effective = detect_vertex_grounding(response)
+            
+            # Count tool calls (grounding citations)
+            tool_call_count = 0
+            if hasattr(response, "candidates") and response.candidates:
+                candidate = response.candidates[0]
+                if hasattr(candidate, "grounding_metadata"):
+                    meta = candidate.grounding_metadata
+                    if hasattr(meta, "grounding_attributions"):
+                        tool_call_count = len(meta.grounding_attributions)
+            
+            # REQUIRED mode enforcement
+            if mode == "REQUIRED" and not grounded_effective:
+                raise GroundingRequiredError(
+                    f"No Vertex grounding evidence found (mode=REQUIRED). "
+                    f"tool_call_count={tool_call_count}"
+                )
+            
+            return response, grounded_effective, tool_call_count
+            
         except asyncio.TimeoutError:
-            elapsed = time.perf_counter() - t0
-            logger.error(
-                "[VERTEX_TIMEOUT] Request timed out after %.2fs (limit=%ds). Model=%s, grounded=%s",
-                elapsed, timeout, model_name, req.grounded
-            )
-            # [LLM_RESULT] Log timeout
-            result_info = {
-                "vendor": "vertex",
-                "model": model_name,
-                "vantage_policy": vantage_policy,
-                "proxy_mode": "disabled",
-                "grounded": req.grounded,
-                "grounded_effective": False,
-                "latency_ms": int(elapsed * 1000),
-                "error": f"TIMEOUT after {timeout}s",
-                "content_length": 0
-            }
-            logger.info(f"[LLM_RESULT] {json.dumps(result_info)}")
-            raise TimeoutError(f"Vertex request timed out after {timeout} seconds")
-        except Exception as e:
-            elapsed = time.perf_counter() - t0
-            logger.error(
-                "[VERTEX_ERROR] Request failed after %.2fs. Model=%s, error=%s",
-                elapsed, model_name, str(e)
-            )
             raise
+        except GroundingRequiredError:
+            raise
+        except Exception as e:
+            logger.error(f"Step 1 grounded generation failed: {e}")
+            raise
+    
+    async def _step2_reshape_json(self, model: gm.GenerativeModel, step1_text: str, 
+                                  original_request: str, timeout: int) -> tuple[Any, Dict]:
+        """
+        Step 2: Reshape to JSON without tools.
+        Returns (response, attestation).
+        """
+        # Build reshape prompt
+        reshape_prompt = f"""Based on this grounded answer, provide a structured JSON response.
+
+Original Question: {original_request}
+
+Grounded Answer: {step1_text}
+
+Provide your response as valid JSON with appropriate keys for the information."""
         
-        # Extract response
-        text = _extract_text_from_candidates(resp)
-        usage = _extract_vertex_usage(resp)
+        # Create content for reshape - single user message
+        reshape_part = gm.Part.from_text(reshape_prompt)
+        reshape_content = gm.Content(role="user", parts=[reshape_part])
         
-        # Check if grounding was effective
-        grounded_effective = detect_vertex_grounding(resp) if req.grounded else False
+        # JSON config for Step 2
+        json_config = self._create_generation_config_step2_json()
         
-        # Log if grounding was requested but not effective
-        if req.grounded and not grounded_effective:
-            logger.warning(
-                "Vertex grounding requested but not detected in response. Model=%s",
-                model_name
+        try:
+            # Step 2 MUST have NO tools
+            response = await asyncio.wait_for(
+                run_in_threadpool(
+                    model.generate_content,
+                    contents=[reshape_content],
+                    generation_config=json_config,
+                    tools=None  # NO TOOLS in step 2 - enforced
+                ),
+                timeout=timeout
             )
+            
+            # Verify no tools were invoked (they shouldn't be since we passed None)
+            tools_invoked = False
+            if hasattr(response, "candidates") and response.candidates:
+                candidate = response.candidates[0]
+                if hasattr(candidate, "function_calls") and candidate.function_calls:
+                    tools_invoked = True
+                    logger.error("VIOLATION: Tools invoked in Step 2 (should be impossible)")
+            
+            # Create attestation
+            attestation = {
+                "step2_tools_invoked": tools_invoked,  # Must be false
+                "step2_source_ref": _sha256_text(step1_text)
+            }
+            
+            return response, attestation
+            
+        except asyncio.TimeoutError:
+            raise
+        except Exception as e:
+            logger.error(f"Step 2 JSON reshape failed: {e}")
+            raise
+    
+    async def complete(self, req: LLMRequest, timeout: int = 60) -> LLMResponse:
+        """
+        Complete request using Vertex AI with Gemini 2.5-pro ONLY.
+        Implements two-step grounded JSON policy when needed.
+        """
+        t0 = time.perf_counter()
         
-        # Add telemetry metadata
-        metadata["vantage_policy"] = vantage_policy
-        metadata["proxies_enabled"] = False
-        metadata["proxy_mode"] = "disabled"
+        # Hard-pin the ONLY allowed model (no rewrites)
+        model_id = GEMINI_MODEL
+        logger.info(f"Using hard-pinned model: {model_id}")
         
-        # [LLM_RESULT] Log successful response
-        result_info = {
-            "vendor": "vertex",
-            "model": model_name,
-            "vantage_policy": vantage_policy,
+        # Validate model (will fail if not in allowed set)
+        is_valid, error_msg = validate_model("vertex", model_id)
+        if not is_valid:
+            raise ValueError(f"MODEL_NOT_ALLOWED: {error_msg}")
+        
+        # Initialize metadata
+        metadata = {
+            "model": model_id,
+            "response_api": "vertex_v1",
+            "proxies_enabled": False,
             "proxy_mode": "disabled",
-            "grounded": req.grounded,
-            "grounded_effective": grounded_effective,
-            "latency_ms": int((time.perf_counter() - t0) * 1000),
-            "usage": usage,
-            "content_length": len(text) if text else 0
+            "vantage_policy": str(getattr(req, "vantage_policy", "NONE"))
         }
-        logger.info(f"[LLM_RESULT] {json.dumps(result_info)}")
+        
+        # Create model with hard-pinned ID
+        model = gm.GenerativeModel(model_id)
+        
+        # Extract ALS block if present (should be in messages already)
+        als_block = None
+        # ALS is handled at template_runner level, included in messages
+        
+        # Build contents using Vertex SDK types (system + ALS + user)
+        contents = self._build_content_with_als(req.messages, als_block)
+        
+        # Check if JSON mode is needed
+        is_json_mode = getattr(req, "json_mode", False)
+        is_grounded = getattr(req, "grounded", False)
+        
+        # Extract grounding mode (AUTO or REQUIRED)
+        grounding_mode = getattr(req, "grounding_mode", "AUTO")
+        if hasattr(req, "meta") and isinstance(req.meta, dict):
+            grounding_mode = req.meta.get("grounding_mode", grounding_mode)
+        
+        # Determine two-step requirement
+        needs_two_step = is_grounded and is_json_mode
+        
+        if needs_two_step:
+            logger.info(f"Two-step grounded JSON mode activated (mode={grounding_mode})")
+            
+            # Step 1: Grounded generation (NO JSON)
+            generation_config = self._create_generation_config_step1(req)
+            step1_resp, grounded_effective, tool_call_count = await self._step1_grounded(
+                model, contents, generation_config, timeout, mode=grounding_mode
+            )
+            
+            step1_text = _extract_text_from_candidates(step1_resp)
+            
+            # Step 2: Reshape to JSON (NO TOOLS)
+            original_request = req.messages[-1].get("content", "") if req.messages else ""
+            step2_resp, attestation = await self._step2_reshape_json(
+                model, step1_text, original_request, timeout
+            )
+            
+            # Use step2 response as final
+            response = step2_resp
+            text = _extract_text_from_candidates(step2_resp)
+            
+            # Update metadata
+            metadata["two_step_used"] = True
+            metadata["grounded_effective"] = grounded_effective
+            metadata["tool_call_count"] = tool_call_count
+            metadata.update(attestation)
+            
+        elif is_grounded:
+            # Single-step grounded (non-JSON)
+            generation_config = self._create_generation_config_step1(req)
+            response, grounded_effective, tool_call_count = await self._step1_grounded(
+                model, contents, generation_config, timeout, mode=grounding_mode
+            )
+            text = _extract_text_from_candidates(response)
+            metadata["grounded_effective"] = grounded_effective
+            metadata["tool_call_count"] = tool_call_count
+            
+        else:
+            # Regular generation (no grounding, may have JSON)
+            if is_json_mode:
+                generation_config = self._create_generation_config_step2_json()
+            else:
+                generation_config = self._create_generation_config_step1(req)
+            
+            try:
+                response = await asyncio.wait_for(
+                    run_in_threadpool(
+                        model.generate_content,
+                        contents=contents,
+                        generation_config=generation_config,
+                        tools=None  # No tools for ungrounded
+                    ),
+                    timeout=timeout
+                )
+                text = _extract_text_from_candidates(response)
+                metadata["grounded_effective"] = False
+                metadata["tool_call_count"] = 0
+                
+            except asyncio.TimeoutError:
+                elapsed = time.perf_counter() - t0
+                logger.error(f"Vertex timeout after {elapsed:.2f}s")
+                raise
+        
+        # Extract usage
+        usage = _extract_vertex_usage(response)
+        
+        # Calculate latency
+        latency_ms = int((time.perf_counter() - t0) * 1000)
+        
+        # Add model version if available (Gemini fingerprint)
+        if hasattr(response, "_raw_response"):
+            raw = response._raw_response
+            if hasattr(raw, "model_version"):
+                metadata["modelVersion"] = raw.model_version
+        elif hasattr(response, "model_version"):
+            metadata["modelVersion"] = response.model_version
+        
+        # Log telemetry
+        logger.info(
+            f"Vertex completed in {latency_ms}ms, "
+            f"grounded={is_grounded}, grounded_effective={metadata.get('grounded_effective', False)}, "
+            f"tool_calls={metadata.get('tool_call_count', 0)}, "
+            f"usage={usage}"
+        )
         
         return LLMResponse(
             content=text,
-            model_version=model_name,
-            model_fingerprint=f"vertex-{model_name}-{self.location}",
-            grounded_effective=grounded_effective,
             usage=usage,
-            latency_ms=int((time.perf_counter() - t0) * 1000),
-            raw_response=resp,
             metadata=metadata
         )

@@ -15,6 +15,7 @@ from contextlib import asynccontextmanager
 from openai import AsyncOpenAI
 
 from app.llm.types import LLMRequest, LLMResponse
+from app.llm.models import OPENAI_ALLOWED_MODELS, OPENAI_DEFAULT_MODEL, validate_model, normalize_model
 from .grounding_detection_helpers import detect_openai_grounding
 from app.core.config import get_settings
 from app.prometheus_metrics import (
@@ -381,9 +382,8 @@ class OpenAIAdapter:
             )
         )
         
-        # Parse and clean allowlist
-        raw_allow = os.getenv("OPENAI_MODELS_ALLOWLIST", "gpt-5").split(",")
-        self.allowlist = {m.strip() for m in raw_allow if m.strip()}
+        # Use centralized model allowlist
+        self.allowlist = OPENAI_ALLOWED_MODELS
     
     def _detect_grounding(self, response) -> tuple[bool, int]:
         """
@@ -431,17 +431,21 @@ class OpenAIAdapter:
         # Initialize tracking variables for logging/telemetry
         vantage_policy = str(getattr(request, 'vantage_policy', 'NONE')).upper().replace("VANTAGEPOLICY.", "")
         
+        # Ensure these exist even when proxy wiring is absent
+        proxy_mode = None  # "rotating"/"backbone" previously; now always None (direct)
+        country_code = None  # used to be from req.meta; keep None
+        
         # Initialize metadata
         metadata = {
             "proxies_enabled": False,
             "proxy_mode": "disabled"
         }
         
-        # Enforce model allowlist
-        if request.model not in self.allowlist:
-            raise ValueError(
-                f"MODEL_NOT_ALLOWED: {request.model} not in {sorted(self.allowlist)}"
-            )
+        # Normalize and validate model
+        model_name = normalize_model("openai", request.model)
+        is_valid, error_msg = validate_model("openai", model_name)
+        if not is_valid:
+            raise ValueError(f"MODEL_NOT_ALLOWED: {error_msg}")
         
         # Split messages properly for Responses API
         instructions, user_input = _split_messages(request.messages)
@@ -507,13 +511,18 @@ class OpenAIAdapter:
             "temperature_used": params.get("temperature"),
         }
         
+        # Configure timeouts
+        connect_s = float(os.getenv("OPENAI_CONNECT_TIMEOUT_MS", "2000")) / 1000.0
+        read_s = float(os.getenv("OPENAI_READ_TIMEOUT_MS", "60000")) / 1000.0
+        total_s = connect_s + read_s
+        
         # [LLM_ROUTE] Log before API call
         route_info = {
             "vendor": "openai",
             "model": request.model,
-            "vantage_policy": vantage_policy,
-            "proxy_mode": proxy_mode if proxy_mode else "direct",
-            "country": country_code if country_code else "none",
+            "vantage_policy": vantage_policy or "NONE",
+            "proxy_mode": proxy_mode or "direct",
+            "country": country_code or "none",
             "grounded": request.grounded,
             "max_tokens": effective_tokens,
             "timeouts_s": {"connect": connect_s, "read": read_s, "total": total_s}
@@ -576,8 +585,8 @@ class OpenAIAdapter:
                         "vendor": "openai",
                         "model": request.model,
                         "vantage_policy": vantage_policy,
-                        "proxy_mode": proxy_mode if proxy_mode else "direct",
-                        "country": country_code if country_code else "none",
+                        "proxy_mode": "disabled",
+                        "country": "none",
                         "grounded": request.grounded,
                         "max_tokens": call_params.get("max_output_tokens", effective_tokens),
                         "timeouts_s": {"connect": connect_s, "read": read_s, "total": total_s},
@@ -845,9 +854,9 @@ class OpenAIAdapter:
         result_info = {
             "vendor": "openai",
             "model": request.model,
-            "vantage_policy": vantage_policy,
-            "proxy_mode": proxy_mode if proxy_mode else "direct",
-            "country": country_code if country_code else "none",
+            "vantage_policy": vantage_policy or "NONE",
+            "proxy_mode": proxy_mode or "direct",
+            "country": country_code or "none",
             "grounded": request.grounded,
             "grounded_effective": grounded_effective,
             "latency_ms": latency_ms,

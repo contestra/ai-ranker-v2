@@ -11,6 +11,7 @@ from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.llm.types import LLMRequest, LLMResponse, ALSContext
+from app.llm.models import validate_model, normalize_model
 from app.llm.adapters.openai_adapter import OpenAIAdapter
 from app.llm.adapters.vertex_adapter import VertexAdapter
 from app.models.models import LLMTelemetry
@@ -69,6 +70,31 @@ class UnifiedLLMAdapter:
             request.vendor = self.get_vendor_for_model(request.model)
             if not request.vendor:
                 raise ValueError(f"Cannot infer vendor for model: {request.model}")
+        
+        # Step 2.5: Strict model validation with guardrails
+        # Normalize model
+        request.model = normalize_model(request.vendor, request.model)
+        
+        # Hard guardrails for allowed models
+        if request.vendor == "vertex":
+            # Force the ONLY allowed Vertex model
+            if request.model != "publishers/google/models/gemini-2.5-pro":
+                raise ValueError(
+                    f"MODEL_NOT_ALLOWED: Only publishers/google/models/gemini-2.5-pro is supported. "
+                    f"Got: {request.model}"
+                )
+        elif request.vendor == "openai":
+            # Check against allowed OpenAI models
+            if request.model not in ["gpt-5", "gpt-5-chat-latest"]:
+                raise ValueError(
+                    f"MODEL_NOT_ALLOWED: Only gpt-5 and gpt-5-chat-latest are supported via Responses API. "
+                    f"Got: {request.model}"
+                )
+        
+        # Double-check with centralized validation
+        is_valid, error_msg = validate_model(request.vendor, request.model)
+        if not is_valid:
+            raise ValueError(f"MODEL_NOT_ALLOWED: {error_msg}")
         
         # Step 3: Validate vendor
         if request.vendor not in ("openai", "vertex"):
