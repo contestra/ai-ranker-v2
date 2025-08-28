@@ -1,0 +1,49 @@
+{
+  "timestamp": "2025-08-28T20:48:25.009632",
+  "duration_seconds": 25.763736963272095,
+  "total_tests": 8,
+  "passed": 0,
+  "failed": 8,
+  "results": [
+    {
+      "test": "openai_ungrounded_no_als",
+      "success": false,
+      "error": "No module named 'sqlalchemy'"
+    },
+    {
+      "test": "openai_ungrounded_with_als",
+      "success": false,
+      "error": "No module named 'sqlalchemy'"
+    },
+    {
+      "test": "openai_grounded_no_als",
+      "success": false,
+      "error": "No module named 'sqlalchemy'"
+    },
+    {
+      "test": "openai_grounded_with_als",
+      "success": false,
+      "error": "No module named 'sqlalchemy'"
+    },
+    {
+      "test": "vertex_ungrounded_no_als",
+      "success": false,
+      "error": "No module named 'sqlalchemy'"
+    },
+    {
+      "test": "vertex_ungrounded_with_als",
+      "success": false,
+      "error": "No module named 'sqlalchemy'"
+    },
+    {
+      "test": "vertex_grounded_no_als",
+      "success": false,
+      "error": "No module named 'sqlalchemy'"
+    },
+    {
+      "test": "vertex_grounded_with_als",
+      "success": false,
+      "error": "No module named 'sqlalchemy'"
+    }
+  ]
+}

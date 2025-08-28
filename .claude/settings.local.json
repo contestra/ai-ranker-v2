@@ -82,7 +82,16 @@
       "Bash(export LLM_TIMEOUT_GR=240)",
       "Bash(export:*)",
       "Bash(timeout:*)",
-      "Bash(bash:*)"
+      "Bash(bash:*)",
+      "Bash(git restore:*)",
+      "Bash(venv/bin/python:*)",
+      "Bash(PYTHONPATH=:*)",
+      "Bash(set -a)",
+      "Bash(set +a)",
+      "Bash(venv/bin/pip:*)",
+      "Bash(./acceptance_check.sh:*)",
+      "Bash(ALLOW_PREVIEW_COMPAT=true venv/bin/python startup_probes.py)",
+      "Bash(./scripts/run_smoke.sh:*)"
     ],
     "deny": [],
     "ask": [],

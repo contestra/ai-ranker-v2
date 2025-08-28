@@ -1,0 +1,49 @@
+{
+  "timestamp": "2025-08-28T20:58:54.991151",
+  "duration_seconds": 28.303169012069702,
+  "total_tests": 8,
+  "passed": 0,
+  "failed": 8,
+  "results": [
+    {
+      "test": "openai_ungrounded_no_als",
+      "success": false,
+      "error": "'NoneType' object has no attribute 'get'"
+    },
+    {
+      "test": "openai_ungrounded_with_als",
+      "success": false,
+      "error": "'NoneType' object has no attribute 'get'"
+    },
+    {
+      "test": "openai_grounded_no_als",
+      "success": false,
+      "error": "'NoneType' object has no attribute 'get'"
+    },
+    {
+      "test": "openai_grounded_with_als",
+      "success": false,
+      "error": "'NoneType' object has no attribute 'get'"
+    },
+    {
+      "test": "vertex_ungrounded_no_als",
+      "success": false,
+      "error": "'NoneType' object has no attribute 'get'"
+    },
+    {
+      "test": "vertex_ungrounded_with_als",
+      "success": false,
+      "error": "'NoneType' object has no attribute 'get'"
+    },
+    {
+      "test": "vertex_grounded_no_als",
+      "success": false,
+      "error": "'NoneType' object has no attribute 'get'"
+    },
+    {
+      "test": "vertex_grounded_with_als",
+      "success": false,
+      "error": "'NoneType' object has no attribute 'get'"
+    }
+  ]
+}

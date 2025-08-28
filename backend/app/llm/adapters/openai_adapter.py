@@ -57,16 +57,20 @@ class _OpenAIRateLimiter:
         
         # Adaptive multiplier tracking for grounded calls
         self._grounded_ratios = []  # List of (actual/estimated) ratios
-        self._grounded_ratios_max = 10  # Keep last 10 ratios
+        self._grounded_ratios_max = 20  # Keep last 20 ratios for better smoothing
     
-    async def await_tpm(self, estimated_tokens):
+    async def await_tpm(self, estimated_tokens, max_output_tokens=None):
         """Wait until TPM budget allows next request with sliding window
         
         Args:
             estimated_tokens: Token estimate for this request
+            max_output_tokens: If provided, can suggest auto-trim
+            
+        Returns:
+            (should_trim, suggested_max_tokens): Auto-trim suggestion if budget tight
         """
         if not self._enabled or not estimated_tokens:
-            return
+            return False, None
         
         async with self._window_lock:
             now = time.time()
@@ -97,9 +101,29 @@ class _OpenAIRateLimiter:
                     self._tokens_used_this_minute = self._debt
                     self._debt = 0
             
+            # Check if auto-trim is needed (when budget is tight)
+            should_trim = False
+            suggested_max = None
+            if max_output_tokens and tokens_needed > 0:
+                remaining_budget = self._tpm_limit - self._tokens_used_this_minute - self._debt
+                time_remaining = max(0, 60 - (now - self._window_start))
+                
+                # Auto-trim if: time remaining < 10s OR would exceed budget
+                if time_remaining < 10 or tokens_needed > remaining_budget:
+                    # Calculate how much we can afford for output
+                    input_portion = estimated_tokens - (max_output_tokens or 0)
+                    available_for_output = max(500, remaining_budget - input_portion)  # Min 500 tokens
+                    
+                    if available_for_output < max_output_tokens:
+                        should_trim = True
+                        suggested_max = int(available_for_output * 0.8)  # Keep 20% buffer
+                        logger.info(f"[RL_AUTOTRIM] Suggesting trim from {max_output_tokens} to {suggested_max} tokens")
+            
             # Reserve tokens
             self._tokens_used_this_minute += tokens_needed
             logger.debug(f"[RL_TPM] Reserved {tokens_needed} tokens (total: {self._tokens_used_this_minute}/{self._tpm_limit})")
+            
+            return should_trim, suggested_max
     
     async def commit_actual_tokens(self, actual_tokens, estimated_tokens, is_grounded=False):
         """Commit actual token usage and track debt
@@ -138,6 +162,22 @@ class _OpenAIRateLimiter:
         sorted_ratios = sorted(self._grounded_ratios)
         median_ratio = sorted_ratios[len(sorted_ratios) // 2]
         return max(1.0, min(2.0, median_ratio))
+    
+    def suggest_trim(self, requested_max_tokens: int, min_out: int = 128) -> int:
+        """Suggest trimmed max_tokens if TPM budget is tight
+        
+        Args:
+            requested_max_tokens: Originally requested max output tokens
+            min_out: Minimum acceptable output tokens
+            
+        Returns:
+            Suggested max_tokens (may be less than requested if budget tight)
+        """
+        headroom = max(0, self._tpm_limit - self._tokens_used_this_minute)
+        # If less than 10% headroom, suggest trimming
+        if headroom < int(0.10 * self._tpm_limit):
+            return max(min_out, int(requested_max_tokens * 0.75))
+        return requested_max_tokens
     
     async def acquire_slot(self):
         """Acquire concurrency slot"""
@@ -392,15 +432,18 @@ class OpenAIAdapter:
         """
         return detect_openai_grounding(response)
     
-    async def complete(self, request: LLMRequest, timeout: int = 60) -> LLMResponse:
+    async def complete(self, request: LLMRequest, timeout: int = None) -> LLMResponse:
         """
         Execute OpenAI API call with GPT-5 specific requirements.
         Uses Responses API with adaptive error handling and retry logic.
         
         Args:
             request: LLM request
-            timeout: Timeout in seconds (60 for ungrounded, 120 for grounded)
+            timeout: Timeout in seconds (default: 120 for grounded, 60 for ungrounded)
         """
+        # Set default timeout based on grounding
+        if timeout is None:
+            timeout = 120 if request.grounded else 60
         # Calculate token estimate for rate limiting
         # Rough estimate: ~4 chars per token for input
         input_chars = sum(len(m.get("content", "")) for m in request.messages)
@@ -412,6 +455,12 @@ class OpenAIAdapter:
         # Total estimate with safety margin
         estimated_tokens = int((estimated_input_tokens + max_output_tokens) * 1.2)
         
+        # Initialize metadata early
+        metadata = {
+            "proxies_enabled": False,
+            "proxy_mode": "disabled"
+        }
+        
         # Add extra for grounded requests (search overhead) using adaptive multiplier
         if request.grounded:
             grounded_multiplier = _RL.get_grounded_multiplier()
@@ -419,8 +468,18 @@ class OpenAIAdapter:
             logger.debug(f"[RL_ADAPTIVE] Using grounded multiplier: {grounded_multiplier:.2f}")
         
         # Check TPM budget before acquiring slot
+        # Also get auto-trim suggestion if budget is tight
         try:
-            await _RL.await_tpm(estimated_tokens)
+            should_trim, suggested_max = await _RL.await_tpm(estimated_tokens, max_output_tokens)
+            
+            # Apply auto-trim if needed and allowed
+            if should_trim and suggested_max and os.getenv("OPENAI_AUTO_TRIM", "true").lower() == "true":
+                original_max = max_output_tokens
+                max_output_tokens = suggested_max
+                metadata["auto_trimmed"] = True
+                metadata["auto_trim_original"] = original_max
+                metadata["auto_trim_reduced"] = suggested_max
+                logger.info(f"[AUTO_TRIM] Reduced max_tokens from {original_max} to {suggested_max}")
         except Exception as _e:
             logger.warning(f"[RL_WARN] Rate limiting issue: {_e}")
             raise
@@ -434,12 +493,6 @@ class OpenAIAdapter:
         # Ensure these exist even when proxy wiring is absent
         proxy_mode = None  # "rotating"/"backbone" previously; now always None (direct)
         country_code = None  # used to be from req.meta; keep None
-        
-        # Initialize metadata
-        metadata = {
-            "proxies_enabled": False,
-            "proxy_mode": "disabled"
-        }
         
         # Normalize and validate model
         model_name = normalize_model("openai", request.model)
@@ -471,10 +524,22 @@ class OpenAIAdapter:
         # Add grounding tools if requested
         grounded_effective = False
         tool_call_count = 0
+        grounding_mode = "AUTO"  # Default mode
+        
         if request.grounded:
-            tool_type = os.getenv("OPENAI_GROUNDING_TOOL", "web_search")
-            params["tools"] = [{"type": tool_type}]
-            params["tool_choice"] = os.getenv("OPENAI_TOOL_CHOICE", "auto")
+            # Use web_search per spec
+            params["tools"] = [{"type": "web_search"}]
+            
+            # Extract grounding mode (AUTO or REQUIRED)
+            grounding_mode = getattr(request, "grounding_mode", "AUTO")
+            if hasattr(request, "meta") and isinstance(request.meta, dict):
+                grounding_mode = request.meta.get("grounding_mode", grounding_mode)
+            
+            # Set tool_choice based on mode
+            if grounding_mode == "REQUIRED":
+                params["tool_choice"] = "required"  # Force tool use
+            else:
+                params["tool_choice"] = "auto"  # Allow model to decide
             
             # Add guardrail instruction to ensure final message after tools
             grounding_instruction = (
@@ -527,6 +592,16 @@ class OpenAIAdapter:
             "max_tokens": effective_tokens,
             "timeouts_s": {"connect": connect_s, "read": read_s, "total": total_s}
         }
+        
+        # [WIRE_DEBUG] Log exact payload being sent
+        if request.grounded:
+            logger.debug(f"[WIRE_DEBUG] OpenAI Responses API call:")
+            logger.debug(f"  Endpoint: /v1/responses")
+            logger.debug(f"  Tools: {params.get('tools', [])}")
+            logger.debug(f"  Tool choice: {params.get('tool_choice', 'none')}")
+            logger.debug(f"  Text format present: {'text' in params and 'format' in params.get('text', {})}")
+            logger.debug(f"  JSON mode: {request.json_mode}")
+            logger.debug(f"  Max output tokens: {params.get('max_output_tokens', 'not set')}")
         logger.info(f"[LLM_ROUTE] {json.dumps(route_info)}")
         
         # Internal call function with error handling and timeout
@@ -594,6 +669,39 @@ class OpenAIAdapter:
                         "error_msg": msg[:200]
                     }
                     logger.error(f"[LLM_TIMEOUT] {json.dumps(timeout_info)}")
+                    
+                    # Check if grounding is not supported for this model
+                    if request.grounded and ("not supported" in msg or "web_search" in msg):
+                        if grounding_mode == "REQUIRED":
+                            raise RuntimeError(
+                                f"GROUNDING_NOT_SUPPORTED: Model {request.model} does not support grounding (REQUIRED mode)"
+                            ) from e
+                        else:
+                            logger.warning(f"Grounding not supported for {request.model}, proceeding without")
+                            # Remove tools and retry with SDK
+                            ungrounded_params = dict(call_params)
+                            ungrounded_params.pop("tools", None)
+                            ungrounded_params.pop("tool_choice", None)
+                            try:
+                                retry_response = await client_with_timeout.responses.create(**ungrounded_params)
+                                metadata["grounding_not_supported"] = True
+                                return retry_response
+                            except Exception as retry_e:
+                                logger.warning(f"Ungrounded retry failed: {retry_e}")
+                    
+                    # Check if this is a preview compatibility issue
+                    elif "web_search_preview" in msg and os.getenv("ALLOW_PREVIEW_COMPAT", "false").lower() == "true":
+                        logger.info("[COMPAT] Retrying with web_search_preview due to API requirement")
+                        # Retry with preview tool using SDK
+                        retry_params = dict(call_params)
+                        retry_params["tools"] = [{"type": "web_search_preview"}]
+                        try:
+                            retry_response = await client_with_timeout.responses.create(**retry_params)
+                            metadata["response_api_tool_variant"] = "preview_retry"
+                            return retry_response
+                        except Exception as retry_e:
+                            logger.warning(f"Preview retry failed: {retry_e}")
+                    
                     raise RuntimeError(f"OPENAI_CALL_FAILED: {msg[:160]}") from e
 
         
@@ -605,6 +713,13 @@ class OpenAIAdapter:
         # Detect grounding if tools were used
         if request.grounded:
             grounded_effective, tool_call_count = self._detect_grounding(response)
+            
+            # REQUIRED mode enforcement
+            if grounding_mode == "REQUIRED" and not grounded_effective:
+                raise RuntimeError(
+                    f"GROUNDING_REQUIRED_ERROR: No OpenAI grounding evidence found (mode=REQUIRED). "
+                    f"tool_call_count={tool_call_count}"
+                )
         
         # Check if initial response had reasoning only
         if _had_reasoning_only(response):

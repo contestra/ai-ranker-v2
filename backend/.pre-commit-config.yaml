@@ -1,0 +1,21 @@
+# Pre-commit hooks for adapter smoke tests
+# Runs fast, network-free tests before commits and pushes
+
+repos:
+  - repo: local
+    hooks:
+      - id: adapters-smoke
+        name: Adapters smoke tests
+        entry: bash -c 'cd backend && pytest -q tests/test_adapters_smoke.py'
+        language: system
+        pass_filenames: false
+        stages: [commit, push]
+        files: '(openai_adapter|vertex_adapter|grounding_detection_helpers)\.py$'
+        
+      - id: rate-limiter-tests
+        name: Rate limiter tests
+        entry: bash -c 'cd backend && pytest -q tests/test_adapters_smoke.py -k rate_limiter'
+        language: system
+        pass_filenames: false
+        stages: [commit]
+        files: 'openai_adapter\.py$'

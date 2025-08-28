@@ -1,0 +1,288 @@
+[
+  {
+    "test": "vertex_simple_qa_ungrounded_text",
+    "vendor": "vertex",
+    "prompt": "simple_qa",
+    "grounded": false,
+    "json_mode": false,
+    "success": true,
+    "latency_s": 16.41,
+    "response_len": 5,
+    "grounded_effective": false,
+    "usage": {
+      "prompt_tokens": 19,
+      "completion_tokens": 1,
+      "total_tokens": 112
+    },
+    "sample": "Paris",
+    "metadata": {
+      "model": "publishers/google/models/gemini-2.5-pro",
+      "grounded_effective": false,
+      "tool_call_count": 0,
+      "two_step_used": false
+    }
+  },
+  {
+    "test": "openai_simple_qa_ungrounded_text",
+    "vendor": "openai",
+    "prompt": "simple_qa",
+    "grounded": false,
+    "json_mode": false,
+    "success": true,
+    "latency_s": 17.44,
+    "response_len": 5,
+    "grounded_effective": null,
+    "usage": {
+      "input_tokens": 28,
+      "output_tokens": 7,
+      "reasoning_tokens": 0,
+      "total_tokens": 35
+    },
+    "sample": "Paris",
+    "metadata": {
+      "model": null,
+      "grounded_effective": null,
+      "tool_call_count": 0,
+      "two_step_used": false
+    }
+  },
+  {
+    "test": "vertex_technical_ungrounded_text",
+    "vendor": "vertex",
+    "prompt": "technical",
+    "grounded": false,
+    "json_mode": false,
+    "success": true,
+    "latency_s": 4.75,
+    "response_len": 0,
+    "grounded_effective": false,
+    "usage": {
+      "prompt_tokens": 18,
+      "completion_tokens": 0,
+      "total_tokens": 517
+    },
+    "sample": "",
+    "metadata": {
+      "model": "publishers/google/models/gemini-2.5-pro",
+      "grounded_effective": false,
+      "tool_call_count": 0,
+      "two_step_used": false
+    }
+  },
+  {
+    "test": "vertex_json_output_ungrounded_json",
+    "vendor": "vertex",
+    "prompt": "json_output",
+    "grounded": false,
+    "json_mode": true,
+    "success": true,
+    "latency_s": 6.94,
+    "response_len": 934,
+    "grounded_effective": false,
+    "usage": {
+      "prompt_tokens": 32,
+      "completion_tokens": 244,
+      "total_tokens": 831
+    },
+    "sample": "{\n  \"languages\": [\n    {\n      \"name\": \"Python\",\n      \"key_features\": [\n        \"Simple, readable syntax\",\n        \"Large standard library\",\n        \"Dynamically typed\",\n        \"Interpreted language...",
+    "valid_json": true,
+    "metadata": {
+      "model": "publishers/google/models/gemini-2.5-pro",
+      "grounded_effective": false,
+      "tool_call_count": 0,
+      "two_step_used": false
+    }
+  },
+  {
+    "test": "openai_json_output_ungrounded_json",
+    "vendor": "openai",
+    "prompt": "json_output",
+    "grounded": false,
+    "json_mode": true,
+    "success": true,
+    "latency_s": 31.0,
+    "response_len": 566,
+    "grounded_effective": null,
+    "usage": {
+      "input_tokens": 41,
+      "output_tokens": 451,
+      "reasoning_tokens": 0,
+      "total_tokens": 492
+    },
+    "sample": "{\n  \"languages\": [\n    {\n      \"name\": \"Python\",\n      \"key_features\": [\n        \"Readable, concise syntax\",\n        \"Dynamic typing\",\n        \"Extensive standard library\",\n        \"Interpreted, cross...",
+    "valid_json": false,
+    "metadata": {
+      "model": null,
+      "grounded_effective": null,
+      "tool_call_count": 0,
+      "two_step_used": false
+    }
+  },
+  {
+    "test": "vertex_grounded_search_grounded_text",
+    "vendor": "vertex",
+    "prompt": "grounded_search",
+    "grounded": true,
+    "json_mode": false,
+    "success": true,
+    "latency_s": 21.66,
+    "response_len": 297,
+    "grounded_effective": true,
+    "usage": {
+      "prompt_tokens": 36,
+      "completion_tokens": 86,
+      "total_tokens": 364
+    },
+    "sample": "As of Thursday, August 28, 2025, the stock price of NVIDIA (NVDA) is **$180.17**.\n\nNVIDIA's market capitalization is approximately **$4.43 trillion**. Other sources report the market cap at $4.39 tril...",
+    "metadata": {
+      "model": "publishers/google/models/gemini-2.5-pro",
+      "grounded_effective": true,
+      "tool_call_count": 0,
+      "two_step_used": false
+    }
+  },
+  {
+    "test": "vertex_json_output_grounded_json",
+    "vendor": "vertex",
+    "prompt": "json_output",
+    "grounded": true,
+    "json_mode": true,
+    "success": true,
+    "latency_s": 33.42,
+    "response_len": 1938,
+    "grounded_effective": true,
+    "usage": {
+      "prompt_tokens": 552,
+      "completion_tokens": 494,
+      "total_tokens": 1533
+    },
+    "sample": "{\n  \"languages\": [\n    {\n      \"name\": \"Python\",\n      \"key_features\": [\n        \"Simple, easy-to-learn, and readable syntax, making it an excellent choice for beginners. [4, 8]\",\n        \"Interpreted...",
+    "valid_json": true,
+    "metadata": {
+      "model": "publishers/google/models/gemini-2.5-pro",
+      "grounded_effective": true,
+      "tool_call_count": 0,
+      "two_step_used": true
+    }
+  },
+  {
+    "test": "vertex_current_events_grounded_text",
+    "vendor": "vertex",
+    "prompt": "current_events",
+    "grounded": true,
+    "json_mode": false,
+    "success": true,
+    "latency_s": 33.61,
+    "response_len": 5620,
+    "grounded_effective": true,
+    "usage": {
+      "prompt_tokens": 28,
+      "completion_tokens": 1033,
+      "total_tokens": 1681
+    },
+    "sample": "## AI Safety in 2024: Navigating New Frontiers and Escalating Challenges\n\n**The year 2024 has been a pivotal period for AI safety research, marked by rapid advancements in AI capabilities and a corres...",
+    "metadata": {
+      "model": "publishers/google/models/gemini-2.5-pro",
+      "grounded_effective": true,
+      "tool_call_count": 0,
+      "two_step_used": false
+    }
+  },
+  {
+    "test": "openai_technical_ungrounded_text",
+    "vendor": "openai",
+    "prompt": "technical",
+    "grounded": false,
+    "json_mode": false,
+    "success": true,
+    "latency_s": 53.76,
+    "response_len": 907,
+    "grounded_effective": null,
+    "usage": {
+      "input_tokens": 43,
+      "output_tokens": 850,
+      "reasoning_tokens": 0,
+      "total_tokens": 893
+    },
+    "sample": "- Layer: Both are transport protocols over IP using ports.\n- Connection: TCP is connection-oriented (3-way handshake); UDP is connectionless.\n- Reliability/ordering: TCP guarantees reliable, in-order ...",
+    "metadata": {
+      "model": null,
+      "grounded_effective": null,
+      "tool_call_count": 0,
+      "two_step_used": false
+    }
+  },
+  {
+    "test": "openai_json_output_grounded_json",
+    "vendor": "openai",
+    "prompt": "json_output",
+    "grounded": true,
+    "json_mode": true,
+    "success": true,
+    "latency_s": 54.82,
+    "response_len": 0,
+    "grounded_effective": null,
+    "usage": {
+      "input_tokens": 4491,
+      "output_tokens": 448,
+      "reasoning_tokens": 0,
+      "total_tokens": 4939
+    },
+    "sample": "",
+    "valid_json": false,
+    "metadata": {
+      "model": null,
+      "grounded_effective": null,
+      "tool_call_count": 0,
+      "two_step_used": false
+    }
+  },
+  {
+    "test": "openai_current_events_grounded_text",
+    "vendor": "openai",
+    "prompt": "current_events",
+    "grounded": true,
+    "json_mode": false,
+    "success": true,
+    "latency_s": 74.0,
+    "response_len": 0,
+    "grounded_effective": null,
+    "usage": {
+      "input_tokens": 4486,
+      "output_tokens": 448,
+      "reasoning_tokens": 0,
+      "total_tokens": 4934
+    },
+    "sample": "",
+    "metadata": {
+      "model": null,
+      "grounded_effective": null,
+      "tool_call_count": 0,
+      "two_step_used": false
+    }
+  },
+  {
+    "test": "openai_grounded_search_grounded_text",
+    "vendor": "openai",
+    "prompt": "grounded_search",
+    "grounded": true,
+    "json_mode": false,
+    "success": true,
+    "latency_s": 107.4,
+    "response_len": 0,
+    "grounded_effective": null,
+    "usage": {
+      "input_tokens": 9487,
+      "output_tokens": 448,
+      "reasoning_tokens": 0,
+      "total_tokens": 9935
+    },
+    "sample": "",
+    "metadata": {
+      "model": null,
+      "grounded_effective": null,
+      "tool_call_count": 0,
+      "two_step_used": false
+    }
+  }
+]

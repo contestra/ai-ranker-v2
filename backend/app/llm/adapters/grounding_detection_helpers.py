@@ -10,7 +10,12 @@ from typing import Any, Tuple, Iterable
 # -----------------------------
 SEARCH_TYPES = {
     "web_search_call", "web_search_result", "web_search",
-    "tool_use", "tool_result",
+    "web_search_preview", "web_search_preview_call", "web_search_preview_result",
+    "tool_use", "tool_result", "function_call", "function_result",
+}
+
+CITATION_ANNOTATION_TYPES = {
+    "url_citation", "web_result", "citation", "url", "reference"
 }
 
 def _iter_output(resp: Any) -> Iterable[Any]:
@@ -36,14 +41,24 @@ def detect_openai_grounding(resp: Any) -> Tuple[bool, int]:
     - URL citation annotations in message content blocks
     """
     grounded, tool_calls = False, 0
+    output_types_seen = set()
+    annotation_types_seen = set()
+    
     for item in _iter_output(resp):
         itype = item.get("type", "") if isinstance(item, dict) else getattr(item, "type", "") or ""
-        # Direct tool/search call signals
-        if itype in SEARCH_TYPES or ("search" in itype.lower()) or ("tool" in itype.lower()):
+        if itype:
+            output_types_seen.add(itype)
+        
+        # Enhanced tool/search call detection
+        if (itype in SEARCH_TYPES or 
+            ("search" in itype.lower()) or 
+            ("tool" in itype.lower()) or
+            ("function" in itype.lower()) or
+            ("call" in itype.lower() and "web" in itype.lower())):
             tool_calls += 1
             grounded = True
 
-        # URL-citation style annotations inside message blocks
+        # Enhanced URL-citation annotations detection
         content = item.get("content") if isinstance(item, dict) else getattr(item, "content", None)
         if isinstance(content, list):
             for blk in content:
@@ -51,8 +66,20 @@ def detect_openai_grounding(resp: Any) -> Tuple[bool, int]:
                 if isinstance(anns, list):
                     for a in anns:
                         atype = (a.get("type") or "").lower() if isinstance(a, dict) else str(a).lower()
-                        if atype in {"url_citation", "web_result"}:
+                        if atype:
+                            annotation_types_seen.add(atype)
+                        
+                        if (atype in CITATION_ANNOTATION_TYPES or
+                            "url" in atype or "citation" in atype or "reference" in atype):
+                            tool_calls += 1
                             grounded = True
+    
+    # Wire-debug logging for detection improvement
+    if output_types_seen or annotation_types_seen:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.debug(f"[OPENAI_GROUNDING] Output types: {output_types_seen}, Annotation types: {annotation_types_seen}, Grounded: {grounded}, Count: {tool_calls}")
+    
     return grounded, tool_calls
 
 # -----------------------------
@@ -75,7 +102,11 @@ def detect_vertex_grounding(resp: Any) -> Tuple[bool, int]:
         web_q = getattr(gm, "web_search_queries", None) or getattr(gm, "webSearchQueries", None) or []
         chunks = getattr(gm, "grounding_chunks", None) or getattr(gm, "groundingChunks", None) or []
         entry  = getattr(gm, "search_entry_point", None) or getattr(gm, "searchEntryPoint", None)
-        if web_q or chunks or entry:
+        # Additional genai-specific fields
+        citations = getattr(gm, "citations", None) or getattr(gm, "grounding_attributions", None) or []
+        contexts = getattr(gm, "retrieved_contexts", None) or getattr(gm, "retrievedContexts", None) or []
+        evidence = getattr(gm, "supporting_evidence", None) or getattr(gm, "supportingEvidence", None) or []
+        if web_q or chunks or entry or citations or contexts or evidence:
             grounded = True
             count = len(web_q) if isinstance(web_q, list) and web_q else 1
             return grounded, count  # short-circuit on first positive
@@ -87,7 +118,11 @@ def detect_vertex_grounding(resp: Any) -> Tuple[bool, int]:
             web_q = gm.get("web_search_queries") or gm.get("webSearchQueries") or []
             chunks = gm.get("grounding_chunks") or gm.get("groundingChunks") or []
             entry  = gm.get("search_entry_point") or gm.get("searchEntryPoint")
-            if web_q or chunks or entry:
+            # Additional genai-specific fields
+            citations = gm.get("citations") or gm.get("grounding_attributions") or []
+            contexts = gm.get("retrieved_contexts") or gm.get("retrievedContexts") or []
+            evidence = gm.get("supporting_evidence") or gm.get("supportingEvidence") or []
+            if web_q or chunks or entry or citations or contexts or evidence:
                 grounded = True
                 count = len(web_q) if isinstance(web_q, list) and web_q else 1
                 return grounded, count
@@ -101,7 +136,10 @@ def detect_vertex_grounding(resp: Any) -> Tuple[bool, int]:
                 gm = cand.get("grounding_metadata") or cand.get("groundingMetadata") or {}
                 if gm.get("web_search_queries") or gm.get("webSearchQueries") \
                    or gm.get("grounding_chunks") or gm.get("groundingChunks") \
-                   or gm.get("search_entry_point") or gm.get("searchEntryPoint"):
+                   or gm.get("search_entry_point") or gm.get("searchEntryPoint") \
+                   or gm.get("citations") or gm.get("grounding_attributions") \
+                   or gm.get("retrieved_contexts") or gm.get("retrievedContexts") \
+                   or gm.get("supporting_evidence") or gm.get("supportingEvidence"):
                     grounded = True
                     count = len(gm.get("web_search_queries") or gm.get("webSearchQueries") or []) or 1
                     return grounded, count
