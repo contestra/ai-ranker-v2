@@ -115,6 +115,14 @@ class _OpenAIRateLimiter:
         self._window_start = time.time()
         self._tokens_used_this_minute = 0
         self._debt = 0  # Track underestimation debt
+        
+        # For concurrency tracking
+        self._active_lock = asyncio.Lock()
+        self._active = 0
+        
+        # Adaptive multiplier tracking for grounded calls
+        self._grounded_ratios = []  # List of (actual/estimated) ratios
+        self._grounded_ratios_max = 10  # Keep last 10 ratios
     
     async def await_tpm(self, estimated_tokens):
         """Wait until TPM budget allows next request with sliding window
@@ -142,9 +150,10 @@ class _OpenAIRateLimiter:
                 time_remaining = 60 - time_in_window
                 
                 if time_remaining > 0:
-                    # Sleep until next window
-                    sleep_time = time_remaining + 0.1  # Small buffer
-                    logger.info(f"[RL_TPM] Sleeping {sleep_time:.1f}s (used {self._tokens_used_this_minute}/{self._tpm_limit} TPM)")
+                    # Sleep until next window with jitter to prevent thundering herd
+                    jitter = random.uniform(0.5, 0.75)  # 500-750ms jitter
+                    sleep_time = time_remaining + 0.1 + jitter  # Buffer + jitter
+                    logger.info(f"[RL_TPM] Sleeping {sleep_time:.1f}s (used {self._tokens_used_this_minute}/{self._tpm_limit} TPM, jitter={jitter:.3f}s)")
                     inc_tpm_deferrals()
                     await asyncio.sleep(sleep_time)
                     
@@ -157,15 +166,26 @@ class _OpenAIRateLimiter:
             self._tokens_used_this_minute += tokens_needed
             logger.debug(f"[RL_TPM] Reserved {tokens_needed} tokens (total: {self._tokens_used_this_minute}/{self._tpm_limit})")
     
-    async def commit_actual_tokens(self, actual_tokens, estimated_tokens):
+    async def commit_actual_tokens(self, actual_tokens, estimated_tokens, is_grounded=False):
         """Commit actual token usage and track debt
         
         Args:
             actual_tokens: Actual tokens used from response.usage
             estimated_tokens: What we estimated before the call
+            is_grounded: Whether this was a grounded request
         """
         if not self._enabled or not actual_tokens:
             return
+        
+        # Track ratio for grounded calls
+        if is_grounded and estimated_tokens > 0:
+            ratio = actual_tokens / estimated_tokens
+            async with self._window_lock:
+                self._grounded_ratios.append(ratio)
+                # Keep only last N ratios
+                if len(self._grounded_ratios) > self._grounded_ratios_max:
+                    self._grounded_ratios.pop(0)
+                logger.debug(f"[RL_ADAPTIVE] Grounded ratio {ratio:.2f} (history: {len(self._grounded_ratios)} samples)")
         
         debt = max(0, actual_tokens - estimated_tokens)
         if debt > 0:
@@ -173,6 +193,16 @@ class _OpenAIRateLimiter:
             async with self._window_lock:
                 self._debt += debt
                 logger.info(f"[RL_DEBT] Underestimated by {debt} tokens (total debt: {self._debt})")
+    
+    def get_grounded_multiplier(self):
+        """Get adaptive multiplier for grounded calls based on history"""
+        if not self._grounded_ratios:
+            return 1.15  # Default multiplier when no history
+        
+        # Use median of recent ratios, clamped to [1.0, 2.0]
+        sorted_ratios = sorted(self._grounded_ratios)
+        median_ratio = sorted_ratios[len(sorted_ratios) // 2]
+        return max(1.0, min(2.0, median_ratio))
     
     async def acquire_slot(self):
         """Acquire concurrency slot"""
@@ -448,9 +478,11 @@ class OpenAIAdapter:
         # Total estimate with safety margin
         estimated_tokens = int((estimated_input_tokens + max_output_tokens) * 1.2)
         
-        # Add extra for grounded requests (search overhead)
+        # Add extra for grounded requests (search overhead) using adaptive multiplier
         if request.grounded:
-            estimated_tokens = int(estimated_tokens * 1.15)
+            grounded_multiplier = _RL.get_grounded_multiplier()
+            estimated_tokens = int(estimated_tokens * grounded_multiplier)
+            logger.debug(f"[RL_ADAPTIVE] Using grounded multiplier: {grounded_multiplier:.2f}")
         
         # Check TPM budget before acquiring slot
         try:
@@ -550,7 +582,7 @@ class OpenAIAdapter:
             # Add guardrail instruction to ensure final message after tools
             grounding_instruction = (
                 "After finishing any tool calls, you MUST produce a final assistant message "
-                "containing the answer in plain text. Limit yourself to 2-3 web searches before answering."
+                "containing the answer in plain text. Limit yourself to at most 2 web searches before answering."
             )
             if instructions:
                 params["instructions"] = f"{instructions}\n\n{grounding_instruction}"
@@ -729,20 +761,39 @@ class OpenAIAdapter:
         # Calculate final latency
         latency_ms = int((time.perf_counter() - t0) * 1000)
         
-        # Extract usage
+        # Extract usage - ChatGPT fix: flatten response.usage and sum numeric keys ending with _tokens
         usage = {}
+        usage_source = "absent"
         if hasattr(response, 'usage'):
             resp_usage = response.usage
             if resp_usage:
+                # Extract all token fields (input_tokens, output_tokens, reasoning_tokens)
+                input_tokens = getattr(resp_usage, 'input_tokens', 0) or getattr(resp_usage, 'prompt_tokens', 0) or 0
+                output_tokens = getattr(resp_usage, 'output_tokens', 0) or getattr(resp_usage, 'completion_tokens', 0) or 0
+                reasoning_tokens = getattr(resp_usage, 'reasoning_tokens', 0) or 0
+                total_tokens = getattr(resp_usage, 'total_tokens', 0) or (input_tokens + output_tokens + reasoning_tokens)
+                
                 usage = {
-                    "prompt_tokens": getattr(resp_usage, 'input_tokens', 0) or getattr(resp_usage, 'prompt_tokens', 0),
-                    "completion_tokens": getattr(resp_usage, 'output_tokens', 0) or getattr(resp_usage, 'completion_tokens', 0),
-                    "total_tokens": getattr(resp_usage, 'total_tokens', 0),
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                    "reasoning_tokens": reasoning_tokens,
+                    "total_tokens": total_tokens
                 }
+                usage_source = "provider"
                 
                 # Commit actual token usage to rate limiter
-                if usage.get('total_tokens'):
-                    await _RL.commit_actual_tokens(usage['total_tokens'], estimated_tokens)
+                if total_tokens > 0:
+                    await _RL.commit_actual_tokens(total_tokens, estimated_tokens, is_grounded=request.grounded)
+        
+        # If no usage from provider, use the estimate
+        if not usage or usage.get('total_tokens', 0) == 0:
+            usage = {
+                "input_tokens": estimated_tokens // 3,  # Rough estimate
+                "output_tokens": estimated_tokens * 2 // 3,  # Rough estimate
+                "reasoning_tokens": 0,
+                "total_tokens": estimated_tokens
+            }
+            usage_source = "estimate"
         
         # Enhanced fallback for grounded empty responses
         if not content and request.grounded:
@@ -883,6 +934,11 @@ class OpenAIAdapter:
                 'extraction_path': metadata.get('extraction_path', 'unknown'),
                 'why_no_content': metadata.get('why_no_content')
             }
+        
+        # Add usage tracking metadata
+        metadata['usage_source'] = usage_source
+        metadata['estimated_tokens'] = estimated_tokens
+        metadata['actual_tokens'] = usage.get('total_tokens', 0)
         
         # Debug logging for grounding
         if request.grounded:

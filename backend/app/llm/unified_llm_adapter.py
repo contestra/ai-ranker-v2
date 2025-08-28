@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.llm.types import LLMRequest, LLMResponse, ALSContext
 from app.llm.adapters.openai_adapter import OpenAIAdapter
 from app.llm.adapters.vertex_adapter import VertexAdapter
+from app.llm.adapters.proxy_circuit_breaker import get_circuit_breaker
 from app.models.models import LLMTelemetry
 from app.services.als.als_builder import ALSBuilder
 from app.core.config import get_settings
@@ -71,6 +72,15 @@ class UnifiedLLMAdapter:
         if request.vendor not in ("openai", "vertex"):
             raise ValueError(f"Unsupported vendor: {request.vendor}")
         
+        # Step 3.5: Check circuit breaker and adjust vantage_policy if needed
+        circuit_breaker = get_circuit_breaker()
+        original_policy = getattr(request, 'vantage_policy', None) or 'ALS_ONLY'
+        should_proxy, adjusted_policy = circuit_breaker.should_use_proxy(request.vendor, str(original_policy))
+        
+        if adjusted_policy != original_policy:
+            logger.info(f"[CIRCUIT_BREAKER] Adjusting vantage_policy: {original_policy} -> {adjusted_policy}")
+            request.vantage_policy = adjusted_policy
+        
         # Step 4: Calculate timeout based on grounding
         timeout = GROUNDED_TIMEOUT if request.grounded else UNGROUNDED_TIMEOUT
         
@@ -83,10 +93,18 @@ class UnifiedLLMAdapter:
                 response = await self.openai_adapter.complete(request, timeout=timeout)
             else:  # vertex - NO SILENT FALLBACKS, auth errors should surface
                 response = await self.vertex_adapter.complete(request, timeout=timeout)
+            
+            # Record success for circuit breaker if using proxy
+            if should_proxy:
+                circuit_breaker.record_success(request.vendor)
+                
         except Exception as e:
             # Convert adapter exceptions to LLM response format
             error_msg = str(e)
             logger.error(f"Adapter failed for vendor={request.vendor}: {error_msg}")
+            
+            # Record failure for circuit breaker
+            circuit_breaker.record_failure(request.vendor, error_msg)
             
             # Return error response instead of letting exception bubble up
             from app.llm.types import LLMResponse
