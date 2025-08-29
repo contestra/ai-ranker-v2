@@ -184,24 +184,81 @@ class UnifiedLLMAdapter:
         Apply Ambient Location Signals to the request
         Modifies the messages to include ALS context
         Enforces ≤350 NFC chars, persists complete provenance
+        
+        ALS Deterministic Builder Contract:
+        1. Canonicalize locale (ISO uppercase, region handling)
+        2. Select variant deterministically with HMAC(seed_key_id, template_id)
+        3. Build ALS text without any runtime date/time
+        4. Normalize to NFC, enforce ≤350 chars (fail-closed, no truncation)
+        5. Compute SHA256 over NFC text
+        6. Persist all provenance fields
+        7. Insert in order: system → ALS → user
         """
         als_context = request.als_context
         
         if not als_context or not isinstance(als_context, dict):
             return request
         
-        # Build ALS block
-        country_code = als_context.get('country_code', 'US')
-        als_block = self.als_builder.build_als_block(
-            country=country_code,
-            max_chars=350,
+        # Step 1: Canonicalize locale (ISO uppercase)
+        country_code = als_context.get('country_code', 'US').upper()
+        locale = als_context.get('locale', f'en-{country_code}')
+        
+        # Step 2: Deterministic variant selection using HMAC
+        import hmac
+        # Use a stable seed key and template identifier
+        seed_key_id = 'v1_2025'  # This should come from config in production
+        template_id = f'als_template_{country_code}'  # Stable template identifier
+        
+        # Generate deterministic seed using HMAC
+        seed_data = f"{seed_key_id}:{template_id}:{country_code}".encode('utf-8')
+        hmac_hash = hmac.new(b'als_secret_key', seed_data, hashlib.sha256).hexdigest()
+        
+        # Convert hash to deterministic index
+        # Get number of available variants from ALS builder
+        tpl = self.als_builder.templates.TEMPLATES.get(country_code)
+        if tpl and hasattr(tpl, 'phrases') and tpl.phrases:
+            num_variants = len(tpl.phrases)
+            # Use first 8 bytes of hash for variant selection
+            variant_idx = int(hmac_hash[:8], 16) % num_variants
+        else:
+            variant_idx = 0
+            num_variants = 1
+        
+        # Step 3: Build ALS block deterministically (no randomization, no timestamps)
+        # Use a fixed date to ensure determinism (regulatory neutral date)
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        
+        # Fixed date for deterministic ALS generation (regulatory neutral)
+        # This is a placeholder date that doesn't imply current time
+        fixed_date = datetime(2024, 1, 15, 12, 0, 0, tzinfo=ZoneInfo('UTC'))
+        
+        # Build with specific variant using deterministic parameters
+        from app.services.als.als_templates import ALSTemplates
+        
+        # For countries with multiple timezones, use deterministic selection
+        # based on the HMAC hash to pick a consistent timezone
+        tz_override = None
+        tpl = self.als_builder.templates.TEMPLATES.get(country_code)
+        if tpl and hasattr(tpl, 'timezone_samples') and tpl.timezone_samples:
+            # Use HMAC to deterministically select timezone
+            tz_idx = int(hmac_hash[8:12], 16) % len(tpl.timezone_samples)
+            tz_override = tpl.timezone_samples[tz_idx]
+        
+        als_block = ALSTemplates.render_block(
+            code=country_code,
+            phrase_idx=variant_idx,
             include_weather=True,
-            randomize=True
+            now=fixed_date,  # Pass fixed date for determinism
+            tz_override=tz_override  # Pass deterministic timezone for multi-tz countries
         )
         
-        # NFC normalization and length check
+        # Step 4: NFC normalization and length check
         import unicodedata
         als_block_nfc = unicodedata.normalize('NFC', als_block)
+        
+        # Normalize whitespace: convert CRLF to LF, trim trailing whitespace
+        als_block_nfc = als_block_nfc.replace('\r\n', '\n').rstrip()
         
         # Enforce 350 char limit - fail closed, no truncation
         if len(als_block_nfc) > 350:
@@ -211,12 +268,11 @@ class UnifiedLLMAdapter:
                 f"Fix: Reduce ALS template configuration"
             )
         
-        # Compute SHA256 for immutability
+        # Step 5: Compute SHA256 over final NFC text
         als_block_sha256 = hashlib.sha256(als_block_nfc.encode('utf-8')).hexdigest()
         
-        # Get variant and seed info from builder
-        variant_id = getattr(self.als_builder, 'last_variant_id', 'default')
-        seed_key_id = getattr(self.als_builder, 'seed_key_id', 'default')
+        # Use the deterministic variant info
+        variant_id = f'variant_{variant_idx}'
         
         # Deep copy messages to avoid reference issues
         import copy
@@ -238,18 +294,20 @@ class UnifiedLLMAdapter:
         # Set flag to prevent reapplication
         request.als_applied = True
         
-        # Store complete ALS provenance metadata
+        # Step 6: Store complete ALS provenance metadata
         if not hasattr(request, 'metadata'):
             request.metadata = {}
         
         request.metadata.update({
-            'als_block_text': als_block_nfc,
-            'als_block_sha256': als_block_sha256,
-            'als_variant_id': variant_id,
-            'seed_key_id': seed_key_id,
-            'als_country': country_code,
-            'als_nfc_length': len(als_block_nfc),
-            'als_present': True
+            'als_block_text': als_block_nfc,  # The exact text inserted
+            'als_block_sha256': als_block_sha256,  # SHA256 of NFC text
+            'als_variant_id': variant_id,  # Which variant was selected
+            'seed_key_id': seed_key_id,  # Seed key used for HMAC
+            'als_country': country_code,  # Canonicalized country
+            'als_locale': locale,  # Full locale string
+            'als_nfc_length': len(als_block_nfc),  # Length after NFC
+            'als_present': True,
+            'als_template_id': template_id  # Template identifier
         })
         
         return request
