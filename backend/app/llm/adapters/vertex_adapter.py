@@ -52,7 +52,7 @@ class GroundingRequiredError(Exception):
     pass
 
 def _extract_vertex_usage(resp: Any) -> Dict[str, int]:
-    """Extract token usage from Vertex response."""
+    """Extract token usage from Vertex response and normalize keys for telemetry."""
     usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
     
     meta = getattr(resp, "usage_metadata", None)
@@ -60,6 +60,10 @@ def _extract_vertex_usage(resp: Any) -> Dict[str, int]:
         usage["prompt_tokens"] = getattr(meta, "prompt_token_count", 0)
         usage["completion_tokens"] = getattr(meta, "candidates_token_count", 0) 
         usage["total_tokens"] = getattr(meta, "total_token_count", 0)
+    
+    # Add synonyms for cross-adapter parity
+    usage["input_tokens"] = usage["prompt_tokens"]
+    usage["output_tokens"] = usage["completion_tokens"]
     
     return usage
 
@@ -550,7 +554,7 @@ Provide your response as valid JSON with appropriate keys for the information.""
             "model": model_id,
             "response_api": "vertex_genai",
             "provider_api_version": "vertex:genai-v1",
-            "region": os.getenv("VERTEX_LOCATION", "us-central1"),
+            "region": os.getenv("VERTEX_LOCATION", "europe-west4"),  # Match init default
             "proxies_enabled": False,
             "proxy_mode": "disabled",
             "vantage_policy": str(getattr(req, "vantage_policy", "NONE"))
@@ -681,9 +685,19 @@ Provide your response as valid JSON with appropriate keys for the information.""
         # Sanitize metadata to remove SDK objects
         clean_metadata = _sanitize_metadata(metadata)
         
+        # Extract commonly-read fields for telemetry parity
+        grounded_effective_flag = bool(clean_metadata.get("grounded_effective", False))
+        
         return LLMResponse(
             content=text,
             model_version=model_id,
+            model_fingerprint=clean_metadata.get("modelVersion"),
+            grounded_effective=grounded_effective_flag,
             usage=usage,
+            latency_ms=latency_ms,
+            raw_response=None,
+            success=True,  # Set to False if JSON validation fails
+            vendor="vertex",
+            model=model_id,
             metadata=clean_metadata
         )

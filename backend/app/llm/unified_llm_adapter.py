@@ -299,8 +299,9 @@ class UnifiedLLMAdapter:
             request.metadata = {}
         
         request.metadata.update({
-            'als_block_text': als_block_nfc,  # The exact text inserted
-            'als_block_sha256': als_block_sha256,  # SHA256 of NFC text
+            # Don't store raw ALS text to prevent location signal leaks
+            # 'als_block_text': als_block_nfc,  # REMOVED for security
+            'als_block_sha256': als_block_sha256,  # SHA256 of NFC text (sufficient for immutability)
             'als_variant_id': variant_id,  # Which variant was selected
             'seed_key_id': seed_key_id,  # Seed key used for HMAC
             'als_country': country_code,  # Canonicalized country
@@ -411,7 +412,7 @@ class UnifiedLLMAdapter:
     
     def get_vendor_for_model(self, model: str) -> Optional[str]:
         """
-        Infer vendor from model name
+        Infer vendor from model name (supports fully-qualified Vertex IDs)
         
         Args:
             model: Model identifier
@@ -419,10 +420,17 @@ class UnifiedLLMAdapter:
         Returns:
             Vendor name or None if unknown
         """
-        # GPT-5 is our ONLY OpenAI model
-        if model == "gpt-5":
+        if not model:
+            return None
+            
+        # OpenAI models
+        if model in ["gpt-5", "gpt-5-chat-latest"]:
             return "openai"
-        elif model.startswith("gemini-"):
+            
+        # Vertex (Gemini) - support both shorthand and fully-qualified
+        if "publishers/google/models/gemini-" in model:
             return "vertex"
-        else:
-            return None  # Unsupported model
+        if model.startswith("gemini-"):
+            return "vertex"
+            
+        return None  # Unsupported model

@@ -810,7 +810,10 @@ class OpenAIAdapter:
                     "input_tokens": input_tokens,
                     "output_tokens": output_tokens,
                     "reasoning_tokens": reasoning_tokens,
-                    "total_tokens": total_tokens
+                    "total_tokens": total_tokens,
+                    # Add synonyms for telemetry compatibility
+                    "prompt_tokens": input_tokens,
+                    "completion_tokens": output_tokens
                 }
                 usage_source = "provider"
                 
@@ -824,7 +827,10 @@ class OpenAIAdapter:
                 "input_tokens": estimated_tokens // 3,  # Rough estimate
                 "output_tokens": estimated_tokens * 2 // 3,  # Rough estimate
                 "reasoning_tokens": 0,
-                "total_tokens": estimated_tokens
+                "total_tokens": estimated_tokens,
+                # Add synonyms for telemetry compatibility
+                "prompt_tokens": estimated_tokens // 3,
+                "completion_tokens": estimated_tokens * 2 // 3
             }
             usage_source = "estimate"
         

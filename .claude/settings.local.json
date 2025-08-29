@@ -91,7 +91,9 @@
       "Bash(venv/bin/pip:*)",
       "Bash(./acceptance_check.sh:*)",
       "Bash(ALLOW_PREVIEW_COMPAT=true venv/bin/python startup_probes.py)",
-      "Bash(./scripts/run_smoke.sh:*)"
+      "Bash(./scripts/run_smoke.sh:*)",
+      "Read(/tmp/**)",
+      "Read(/tmp/**)"
     ],
     "deny": [],
     "ask": [],
