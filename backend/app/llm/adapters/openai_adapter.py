@@ -461,7 +461,9 @@ class OpenAIAdapter:
         # Initialize metadata early
         metadata = {
             "proxies_enabled": False,
-            "proxy_mode": "disabled"
+            "proxy_mode": "disabled",
+            "response_api": "responses_http",
+            "provider_api_version": "openai:responses-v1"
         }
         
         # Token configuration with environment defaults
@@ -558,9 +560,13 @@ class OpenAIAdapter:
             else:
                 params["instructions"] = grounding_instruction
         
-        # GPT-5 specific parameters
-        if request.model == "gpt-5":
-            # MANDATORY: temperature=1.0 for GPT-5, especially with tools
+        # Determine if tools are attached (not necessarily used)
+        # tools_attached: we attached OpenAI web_search on this call (not the same as "search actually happened")
+        tools_attached = bool(params.get("tools"))
+        
+        # GPT-5 specific parameters - use normalized model name
+        if model_name == "gpt-5" or tools_attached:
+            # MANDATORY: temperature=1.0 for GPT-5 or when using tools
             params["temperature"] = 1.0
         else:
             if request.temperature is not None:
@@ -725,6 +731,7 @@ class OpenAIAdapter:
             
             # REQUIRED mode enforcement
             if grounding_mode == "REQUIRED" and not grounded_effective:
+                metadata['why_not_grounded'] = "web_search not available in Responses API" if tool_call_count == 0 else "tools called but no web search"
                 raise RuntimeError(
                     f"GROUNDING_REQUIRED_ERROR: No OpenAI grounding evidence found (mode=REQUIRED). "
                     f"tool_call_count={tool_call_count}"

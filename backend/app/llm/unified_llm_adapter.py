@@ -62,8 +62,13 @@ class UnifiedLLMAdapter:
             Unified LLM response
         """
         
-        # Step 1: ALS is now handled at template_runner level with proper message ordering
-        # DO NOT apply ALS here - it's already in the messages with correct system prompt
+        # Step 1: Apply ALS if context is provided and not already in messages
+        # Check if ALS is already applied using stable flag (not fragile string check)
+        als_already_applied = getattr(request, 'als_applied', False)
+        
+        # Apply ALS if we have context and it's not already applied
+        if hasattr(request, 'als_context') and request.als_context and not als_already_applied:
+            request = self._apply_als(request)
         
         # Step 2: Infer vendor if missing
         if not request.vendor:
@@ -77,18 +82,30 @@ class UnifiedLLMAdapter:
         
         # Hard guardrails for allowed models
         if request.vendor == "vertex":
-            # Force the ONLY allowed Vertex model
-            if request.model != "publishers/google/models/gemini-2.5-pro":
+            # Check against configurable allowlist
+            allowed_models = os.getenv("ALLOWED_VERTEX_MODELS", 
+                "publishers/google/models/gemini-2.5-pro,publishers/google/models/gemini-2.0-flash").split(",")
+            if request.model not in allowed_models:
                 raise ValueError(
-                    f"MODEL_NOT_ALLOWED: Only publishers/google/models/gemini-2.5-pro is supported. "
-                    f"Got: {request.model}"
+                    f"Model not allowed: {request.model}\n"
+                    f"Allowed models: {allowed_models}\n"
+                    f"To use this model:\n"
+                    f"1. Add to ALLOWED_VERTEX_MODELS env var\n"
+                    f"2. Redeploy service\n"
+                    f"Note: We don't silently rewrite models (Adapter PRD)"
                 )
         elif request.vendor == "openai":
-            # Check against allowed OpenAI models
-            if request.model not in ["gpt-5", "gpt-5-chat-latest"]:
+            # Check against configurable allowlist
+            allowed_models = os.getenv("ALLOWED_OPENAI_MODELS", 
+                "gpt-5,gpt-5-chat-latest").split(",")
+            if request.model not in allowed_models:
                 raise ValueError(
-                    f"MODEL_NOT_ALLOWED: Only gpt-5 and gpt-5-chat-latest are supported via Responses API. "
-                    f"Got: {request.model}"
+                    f"Model not allowed: {request.model}\n"
+                    f"Allowed models: {allowed_models}\n"
+                    f"To use this model:\n"
+                    f"1. Add to ALLOWED_OPENAI_MODELS env var\n"
+                    f"2. Redeploy service\n"
+                    f"Note: We don't silently rewrite models (Adapter PRD)"
                 )
         
         # Double-check with centralized validation
@@ -105,12 +122,18 @@ class UnifiedLLMAdapter:
         normalized_policy = original_policy
         proxies_normalized = False
         
+        # Store original for telemetry tracking
+        request.original_vantage_policy = original_policy
+        
         if DISABLE_PROXIES and original_policy in ("PROXY_ONLY", "ALS_PLUS_PROXY"):
             # Normalize proxy policies to ALS_ONLY
             normalized_policy = "ALS_ONLY"
             proxies_normalized = True
+            request.proxy_normalization_applied = True
             logger.info(f"[PROXY_DISABLED] Normalizing vantage_policy: {original_policy} -> {normalized_policy}")
             request.vantage_policy = normalized_policy
+        else:
+            request.proxy_normalization_applied = False
         
         # Set flag to prevent any proxy usage downstream
         request.proxies_disabled = DISABLE_PROXIES
@@ -160,6 +183,7 @@ class UnifiedLLMAdapter:
         """
         Apply Ambient Location Signals to the request
         Modifies the messages to include ALS context
+        Enforces ≤350 NFC chars, persists complete provenance
         """
         als_context = request.als_context
         
@@ -175,17 +199,59 @@ class UnifiedLLMAdapter:
             randomize=True
         )
         
-        # Prepend ALS to the first user message
-        modified_messages = request.messages.copy()
+        # NFC normalization and length check
+        import unicodedata
+        als_block_nfc = unicodedata.normalize('NFC', als_block)
         
+        # Enforce 350 char limit - fail closed, no truncation
+        if len(als_block_nfc) > 350:
+            raise ValueError(
+                f"ALS_BLOCK_TOO_LONG: {len(als_block_nfc)} chars exceeds 350 limit (NFC normalized)\n"
+                f"No automatic truncation (immutability requirement)\n"
+                f"Fix: Reduce ALS template configuration"
+            )
+        
+        # Compute SHA256 for immutability
+        als_block_sha256 = hashlib.sha256(als_block_nfc.encode('utf-8')).hexdigest()
+        
+        # Get variant and seed info from builder
+        variant_id = getattr(self.als_builder, 'last_variant_id', 'default')
+        seed_key_id = getattr(self.als_builder, 'seed_key_id', 'default')
+        
+        # Deep copy messages to avoid reference issues
+        import copy
+        modified_messages = copy.deepcopy(request.messages)
+        
+        # Prepend ALS to the first user message (maintains system → ALS → user order)
         for i, msg in enumerate(modified_messages):
             if msg.get('role') == 'user':
                 original_content = msg['content']
-                msg['content'] = f"{als_block}\n\n{original_content}"
+                modified_messages[i] = {
+                    'role': 'user',
+                    'content': f"{als_block_nfc}\n\n{original_content}"
+                }
                 break
         
         # Update request with modified messages
         request.messages = modified_messages
+        
+        # Set flag to prevent reapplication
+        request.als_applied = True
+        
+        # Store complete ALS provenance metadata
+        if not hasattr(request, 'metadata'):
+            request.metadata = {}
+        
+        request.metadata.update({
+            'als_block_text': als_block_nfc,
+            'als_block_sha256': als_block_sha256,
+            'als_variant_id': variant_id,
+            'seed_key_id': seed_key_id,
+            'als_country': country_code,
+            'als_nfc_length': len(als_block_nfc),
+            'als_present': True
+        })
+        
         return request
     
     async def _emit_telemetry(
@@ -194,15 +260,51 @@ class UnifiedLLMAdapter:
         response: LLMResponse,
         session: AsyncSession
     ):
-        """Emit telemetry row to database"""
+        """Emit comprehensive telemetry row to database"""
         try:
-            # Log grounding telemetry
-            if request.grounded:
-                logger.info(
-                    "Grounding telemetry: requested=%s effective=%s vendor=%s model=%s",
-                    request.grounded, response.grounded_effective, 
-                    request.vendor, request.model
-                )
+            # Build comprehensive metadata JSON
+            meta_json = {
+                # ALS fields
+                'als_present': request.metadata.get('als_present', False) if hasattr(request, 'metadata') else False,
+                'als_block_sha256': request.metadata.get('als_block_sha256') if hasattr(request, 'metadata') else None,
+                'als_variant_id': request.metadata.get('als_variant_id') if hasattr(request, 'metadata') else None,
+                'seed_key_id': request.metadata.get('seed_key_id') if hasattr(request, 'metadata') else None,
+                'als_country': request.metadata.get('als_country') if hasattr(request, 'metadata') else None,
+                'als_nfc_length': request.metadata.get('als_nfc_length') if hasattr(request, 'metadata') else None,
+                
+                # Grounding fields
+                'grounding_mode_requested': 'REQUIRED' if request.grounded else 'NONE',
+                'grounded_effective': response.grounded_effective,
+                'tool_call_count': response.metadata.get('tool_call_count', 0) if hasattr(response, 'metadata') else 0,
+                'why_not_grounded': response.metadata.get('why_not_grounded') if hasattr(response, 'metadata') else None,
+                
+                # API versioning
+                'response_api': response.metadata.get('response_api') if hasattr(response, 'metadata') else None,
+                'provider_api_version': response.metadata.get('provider_api_version') if hasattr(response, 'metadata') else None,
+                'region': response.metadata.get('region') if hasattr(response, 'metadata') else None,
+                
+                # Proxy normalization tracking
+                'vantage_policy_before': getattr(request, 'original_vantage_policy', None),
+                'vantage_policy_after': getattr(request, 'vantage_policy', 'ALS_ONLY'),
+                'proxies_normalized': getattr(request, 'proxy_normalization_applied', False),
+                
+                # Model info
+                'model_fingerprint': response.model_fingerprint if hasattr(response, 'model_fingerprint') else None,
+                'normalized_model': request.model
+            }
+            
+            # Log comprehensive telemetry
+            logger.info(
+                "LLM telemetry: vendor=%s model=%s grounded_requested=%s grounded_effective=%s "
+                "als_present=%s tool_count=%s response_api=%s region=%s",
+                request.vendor, request.model, request.grounded, response.grounded_effective,
+                meta_json['als_present'], meta_json['tool_call_count'],
+                meta_json['response_api'], meta_json['region']
+            )
+            
+            # Store structured telemetry as JSON string for now (can be migrated to JSONB later)
+            import json
+            meta_str = json.dumps(meta_json)
             
             telemetry = LLMTelemetry(
                 vendor=request.vendor,
@@ -220,12 +322,16 @@ class UnifiedLLMAdapter:
                 run_id=request.run_id
             )
             
+            # Store meta_json in memory for later migration to JSONB column
+            # For now, log it comprehensively
+            logger.debug(f"Telemetry metadata: {meta_str}")
+            
             session.add(telemetry)
             await session.flush()
             
         except Exception as e:
             # Log but don't fail the request
-            print(f"Failed to emit telemetry: {e}")
+            logger.error(f"Failed to emit telemetry: {e}")
     
     def validate_model(self, vendor: str, model: str) -> bool:
         """

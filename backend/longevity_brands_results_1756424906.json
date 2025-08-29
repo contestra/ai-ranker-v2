@@ -1,0 +1,275 @@
+{
+  "timestamp": "2025-08-29T01:48:26.705469",
+  "prompt": "List the 10 most trusted longevity supplement brands",
+  "total_tests": 12,
+  "successful": 12,
+  "total_time_seconds": 166,
+  "results": [
+    {
+      "test": "OpenAI Ungrounded - No ALS",
+      "vendor": "openai",
+      "model": "gpt-5",
+      "grounded": false,
+      "policy": "NONE",
+      "country": null,
+      "success": true,
+      "latency_ms": 6723,
+      "brands_count": 3,
+      "brands": [
+        "Here are 10 of the most trusted longevity supplement brands",
+        "Known for",
+        "Strengths"
+      ],
+      "grounded_effective": false,
+      "usage": {
+        "input_tokens": 16,
+        "output_tokens": 500,
+        "reasoning_tokens": 0,
+        "total_tokens": 516
+      }
+    },
+    {
+      "test": "OpenAI Grounded - No ALS",
+      "vendor": "openai",
+      "model": "gpt-5",
+      "grounded": true,
+      "policy": "NONE",
+      "country": null,
+      "success": true,
+      "latency_ms": 4872,
+      "brands_count": 5,
+      "brands": [
+        "Life Extension",
+        "NOW Foods",
+        "Jarrow Formulas",
+        "Designs for Health",
+        "Momentous"
+      ],
+      "grounded_effective": false,
+      "usage": {
+        "input_tokens": 52,
+        "output_tokens": 368,
+        "reasoning_tokens": 0,
+        "total_tokens": 420
+      }
+    },
+    {
+      "test": "OpenAI Ungrounded - ALS US",
+      "vendor": "openai",
+      "model": "gpt-5",
+      "grounded": false,
+      "policy": "ALS",
+      "country": "US",
+      "success": true,
+      "latency_ms": 5269,
+      "brands_count": 28,
+      "brands": [
+        "Here are 10 of the most trusted longevity supplement brands",
+        "Thorne Research",
+        "Known for rigorous third-party testing and NSF certification.",
+        "Offers NAD boosters, antioxidants, and foundational health supplements.",
+        "Life Extension",
+        "One of the oldest and most research-driven supplement companies.",
+        "Strong focus on evidence-based formulations for aging, mitochondrial health, and cellular repair.",
+        "Elysium Health",
+        "Collaborates with leading scientists",
+        "Known for Basis"
+      ],
+      "grounded_effective": false,
+      "usage": {
+        "input_tokens": 16,
+        "output_tokens": 500,
+        "reasoning_tokens": 0,
+        "total_tokens": 516
+      }
+    },
+    {
+      "test": "OpenAI Grounded - ALS US",
+      "vendor": "openai",
+      "model": "gpt-5",
+      "grounded": true,
+      "policy": "ALS",
+      "country": "US",
+      "success": true,
+      "latency_ms": 5365,
+      "brands_count": 6,
+      "brands": [
+        "Thorne Research",
+        "Elysium Health",
+        "Novos",
+        "DoNotAge",
+        "NOW Foods",
+        "Jarrow Formulas"
+      ],
+      "grounded_effective": false,
+      "usage": {
+        "input_tokens": 52,
+        "output_tokens": 362,
+        "reasoning_tokens": 0,
+        "total_tokens": 414
+      }
+    },
+    {
+      "test": "OpenAI Ungrounded - ALS DE",
+      "vendor": "openai",
+      "model": "gpt-5",
+      "grounded": false,
+      "policy": "ALS",
+      "country": "DE",
+      "success": true,
+      "latency_ms": 6160,
+      "brands_count": 29,
+      "brands": [
+        "Thorne Research",
+        "Known for rigorous third-party testing and NSF certification.",
+        "Offers NAD+ precursors, antioxidants, and mitochondrial support supplements.",
+        "Life Extension",
+        "One of the oldest and most science-driven supplement companies.",
+        "Publishes research and offers a wide range of longevity-focused products.",
+        "Elysium Health",
+        "Collaborates with top scientists from Harvard, MIT, and other institutions.",
+        "Known for *Basis*",
+        "Tru Niagen"
+      ],
+      "grounded_effective": false,
+      "usage": {
+        "input_tokens": 16,
+        "output_tokens": 500,
+        "reasoning_tokens": 0,
+        "total_tokens": 516
+      }
+    },
+    {
+      "test": "OpenAI Grounded - ALS DE",
+      "vendor": "openai",
+      "model": "gpt-5",
+      "grounded": true,
+      "policy": "ALS",
+      "country": "DE",
+      "success": true,
+      "latency_ms": 4532,
+      "brands_count": 2,
+      "brands": [
+        "Thorne Research",
+        "DoNotAge"
+      ],
+      "grounded_effective": false,
+      "usage": {
+        "input_tokens": 52,
+        "output_tokens": 410,
+        "reasoning_tokens": 0,
+        "total_tokens": 462
+      }
+    },
+    {
+      "test": "Vertex Ungrounded - No ALS",
+      "vendor": "vertex",
+      "model": "gemini-2.0-flash-exp",
+      "grounded": false,
+      "policy": "NONE",
+      "country": null,
+      "success": true,
+      "latency_ms": 25548,
+      "brands_count": 0,
+      "brands": [],
+      "grounded_effective": false,
+      "usage": {
+        "prompt_tokens": 10,
+        "completion_tokens": 0,
+        "total_tokens": 509
+      }
+    },
+    {
+      "test": "Vertex Grounded - No ALS",
+      "vendor": "vertex",
+      "model": "gemini-2.0-flash-exp",
+      "grounded": true,
+      "policy": "NONE",
+      "country": null,
+      "success": true,
+      "latency_ms": 47560,
+      "brands_count": 0,
+      "brands": [],
+      "grounded_effective": true,
+      "usage": {
+        "prompt_tokens": 10,
+        "completion_tokens": 1098,
+        "total_tokens": 3642
+      }
+    },
+    {
+      "test": "Vertex Ungrounded - ALS US",
+      "vendor": "vertex",
+      "model": "gemini-2.0-flash-exp",
+      "grounded": false,
+      "policy": "ALS",
+      "country": "US",
+      "success": true,
+      "latency_ms": 4750,
+      "brands_count": 0,
+      "brands": [],
+      "grounded_effective": false,
+      "usage": {
+        "prompt_tokens": 10,
+        "completion_tokens": 0,
+        "total_tokens": 509
+      }
+    },
+    {
+      "test": "Vertex Grounded - ALS US",
+      "vendor": "vertex",
+      "model": "gemini-2.0-flash-exp",
+      "grounded": true,
+      "policy": "ALS",
+      "country": "US",
+      "success": true,
+      "latency_ms": 12731,
+      "brands_count": 1,
+      "brands": [
+        "Here are 10 of the most trusted longevity supplement brands, based on available data"
+      ],
+      "grounded_effective": true,
+      "usage": {
+        "prompt_tokens": 10,
+        "completion_tokens": 722,
+        "total_tokens": 1229
+      }
+    },
+    {
+      "test": "Vertex Ungrounded - ALS DE",
+      "vendor": "vertex",
+      "model": "gemini-2.0-flash-exp",
+      "grounded": false,
+      "policy": "ALS",
+      "country": "DE",
+      "success": true,
+      "latency_ms": 4720,
+      "brands_count": 0,
+      "brands": [],
+      "grounded_effective": false,
+      "usage": {
+        "prompt_tokens": 10,
+        "completion_tokens": 0,
+        "total_tokens": 509
+      }
+    },
+    {
+      "test": "Vertex Grounded - ALS DE",
+      "vendor": "vertex",
+      "model": "gemini-2.0-flash-exp",
+      "grounded": true,
+      "policy": "ALS",
+      "country": "DE",
+      "success": true,
+      "latency_ms": 16441,
+      "brands_count": 0,
+      "brands": [],
+      "grounded_effective": true,
+      "usage": {
+        "prompt_tokens": 10,
+        "completion_tokens": 840,
+        "total_tokens": 1682
+      }
+    }
+  ]
+}

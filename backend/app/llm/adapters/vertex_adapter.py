@@ -31,8 +31,8 @@ from .grounding_detection_helpers import detect_vertex_grounding
 
 logger = logging.getLogger(__name__)
 
-# Force the ONLY allowed model - no rewrites or variants
-GEMINI_MODEL = "publishers/google/models/gemini-2.5-pro"
+# Models are now validated against allowlist in orchestrator
+# No hard-coding or silent rewrites (Adapter PRD)
 
 async def _call_vertex_model(model, *args, **kwargs):
     """
@@ -438,7 +438,7 @@ Provide your response as valid JSON with appropriate keys for the information.""
             # Use genai client to generate
             response = await asyncio.wait_for(
                 self.genai_client.aio.models.generate_content(
-                    model=GEMINI_MODEL,
+                    model=req.model,
                     contents=contents_genai,
                     config=config
                 ),
@@ -499,7 +499,7 @@ Provide your response as valid JSON with appropriate keys for the information.""
         try:
             response = await asyncio.wait_for(
                 self.genai_client.aio.models.generate_content(
-                    model=GEMINI_MODEL,
+                    model=req.model,
                     contents=contents_genai,
                     config=config
                 ),
@@ -536,11 +536,11 @@ Provide your response as valid JSON with appropriate keys for the information.""
         """
         t0 = time.perf_counter()
         
-        # Hard-pin the ONLY allowed model (no rewrites)
-        model_id = GEMINI_MODEL
-        logger.info(f"Using hard-pinned model: {model_id}")
+        # Use the requested model (already validated in orchestrator)
+        model_id = req.model
+        logger.info(f"Using requested model: {model_id}")
         
-        # Validate model (will fail if not in allowed set)
+        # Double-check validation (belt and suspenders)
         is_valid, error_msg = validate_model("vertex", model_id)
         if not is_valid:
             raise ValueError(f"MODEL_NOT_ALLOWED: {error_msg}")
@@ -548,7 +548,9 @@ Provide your response as valid JSON with appropriate keys for the information.""
         # Initialize metadata
         metadata = {
             "model": model_id,
-            "response_api": "vertex_v1",
+            "response_api": "vertex_genai",
+            "provider_api_version": "vertex:genai-v1",
+            "region": os.getenv("VERTEX_LOCATION", "us-central1"),
             "proxies_enabled": False,
             "proxy_mode": "disabled",
             "vantage_policy": str(getattr(req, "vantage_policy", "NONE"))
@@ -610,7 +612,7 @@ Provide your response as valid JSON with appropriate keys for the information.""
             # Update metadata
             metadata["two_step_used"] = True
             metadata["grounded_effective"] = grounded_effective
-            metadata["grounding_count"] = tool_call_count
+            metadata["tool_call_count"] = tool_call_count
             metadata.update(attestation)
             
         elif is_grounded:
@@ -626,7 +628,7 @@ Provide your response as valid JSON with appropriate keys for the information.""
                 )
             text = _extract_text_from_candidates(response)
             metadata["grounded_effective"] = grounded_effective
-            metadata["grounding_count"] = tool_call_count
+            metadata["tool_call_count"] = tool_call_count
             
         else:
             # Regular generation (no grounding, may have JSON)
@@ -647,7 +649,7 @@ Provide your response as valid JSON with appropriate keys for the information.""
                 )
                 text = _extract_text_from_candidates(response)
                 metadata["grounded_effective"] = False
-                metadata["grounding_count"] = 0
+                metadata["tool_call_count"] = 0
                 
             except asyncio.TimeoutError:
                 elapsed = time.perf_counter() - t0
@@ -672,7 +674,7 @@ Provide your response as valid JSON with appropriate keys for the information.""
         logger.info(
             f"Vertex completed in {latency_ms}ms, "
             f"grounded={is_grounded}, grounded_effective={metadata.get('grounded_effective', False)}, "
-            f"tool_calls={metadata.get('grounding_count', 0)}, "
+            f"tool_calls={metadata.get('tool_call_count', 0)}, "
             f"usage={usage}"
         )
         
