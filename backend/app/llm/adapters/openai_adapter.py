@@ -520,9 +520,37 @@ class OpenAIAdapter:
         # Use centralized model allowlist
         self.allowlist = OPENAI_ALLOWED_MODELS
         
-        # In-process cache for web_search capability by model (True/False)
-        # We set to False on first 400 "not supported" and stop attaching tools after that.
-        self._web_search_support = {}
+        # Tri-state cache for web_search capability by model
+        # Values: "web_search" | "web_search_preview" | "unsupported" | None
+        # Includes TTL for unsupported entries to allow re-checking after entitlement changes
+        self._web_search_tool_type = {}  # model -> (tool_type, cached_at)
+        self._cache_ttl_seconds = 900  # 15 minutes TTL for "unsupported" entries
+    
+    def _get_cached_tool_type(self, model: str) -> Optional[str]:
+        """Get cached tool type with TTL handling for unsupported entries"""
+        import time
+        
+        if model not in self._web_search_tool_type:
+            return None
+            
+        tool_type, cached_at = self._web_search_tool_type[model]
+        
+        # If unsupported, check TTL
+        if tool_type == "unsupported":
+            elapsed = time.time() - cached_at
+            if elapsed > self._cache_ttl_seconds:
+                # TTL expired, remove from cache to allow retry
+                del self._web_search_tool_type[model]
+                logger.debug(f"[CACHE_TTL] Expired unsupported cache for {model} after {elapsed:.0f}s")
+                return None
+        
+        return tool_type
+    
+    def _set_cached_tool_type(self, model: str, tool_type: str):
+        """Set cached tool type with timestamp"""
+        import time
+        self._web_search_tool_type[model] = (tool_type, time.time())
+        logger.debug(f"[CACHE] Set tool type for {model}: {tool_type}")
     
     def _detect_grounding(self, response) -> tuple[bool, int]:
         """
@@ -633,53 +661,35 @@ class OpenAIAdapter:
             
             logger.debug(f"[OPENAI_GROUNDING] Attempting grounded request: model={model_name}, mode={grounding_mode}")
             
-            # Check cache for known support status
-            model_support = self._web_search_support.get(model_name)
-            if model_support is False:
-                # Known unsupported → act immediately
-                logger.debug(f"[OPENAI_GROUNDING] Model {model_name} known not to support web_search, "
+            # Check tri-state cache for known tool type
+            cached_tool_type = self._get_cached_tool_type(model_name)
+            
+            if cached_tool_type == "unsupported":
+                # Known unsupported (both variants failed) → act immediately
+                logger.debug(f"[OPENAI_GROUNDING] Model {model_name} known not to support any web_search variant, "
                            f"proceeding ungrounded (cached)")
-                metadata["why_not_grounded"] = "web_search unsupported for model"
+                metadata["why_not_grounded"] = "both_web_search_variants_unsupported"
                 metadata["grounding_not_supported"] = True
                 if grounding_mode == "REQUIRED":
                     logger.debug(f"[OPENAI_GROUNDING] Failing REQUIRED mode due to unsupported model")
                     raise GroundingNotSupportedError(
-                        f"GROUNDING_NOT_SUPPORTED: Model {request.model} does not support web_search (REQUIRED mode)"
+                        f"GROUNDING_NOT_SUPPORTED: Model {request.model} does not support any web_search variant (REQUIRED mode)"
                     )
-                # Preferred/Auto: proceed ungrounded (realistic), no tools
+                # AUTO: proceed ungrounded (realistic), no tools
             else:
-                # Unknown support? Pre-flight probe (cheap & fast) before attaching tools
-                if model_support is None:
-                    logger.debug(f"[OPENAI_GROUNDING] Probing web_search capability for {model_name}")
-                    supported = await _probe_web_search_capability(self.client, model_name, timeout)
-                    self._web_search_support[model_name] = bool(supported)
-                    if not supported:
-                        logger.debug(f"[OPENAI_GROUNDING] Model {model_name} does not support web_search (probed), "
-                                   f"proceeding ungrounded")
-                        metadata["grounding_not_supported"] = True
-                        metadata["why_not_grounded"] = "web_search unsupported for model"
-                        if grounding_mode == "REQUIRED":
-                            # Fail-closed per PRD (no first content attempt)
-                            logger.debug(f"[OPENAI_GROUNDING] Failing REQUIRED mode due to probe failure")
-                            raise GroundingNotSupportedError(
-                                f"GROUNDING_NOT_SUPPORTED: Model {request.model} does not support web_search (REQUIRED mode)"
-                            )
-                        # Preferred/Auto: proceed ungrounded
-                    else:
-                        logger.debug(f"[OPENAI_GROUNDING] Model {model_name} supports web_search (probed)")
+                # Get preferred tool type (from env or cache)
+                tool_type = _choose_web_search_tool_type(cached_tool_type)
                 
-                # If supported (cached or probed), attach tools now
-                if self._web_search_support.get(model_name, True):
-                    # Use the tool type chooser to pick the right variant
-                    tool_type = _choose_web_search_tool_type()
-                    logger.debug(f"[OPENAI_GROUNDING] Attaching {tool_type} tool with mode={grounding_mode}")
-                    params["tools"] = [{"type": tool_type}]
-                    
-                    # Set tool_choice based on mode
-                    if grounding_mode == "REQUIRED":
-                        params["tool_choice"] = "required"  # Force tool use
-                    else:
-                        params["tool_choice"] = "auto"  # Allow model to decide
+                # Attach the tool
+                logger.debug(f"[OPENAI_GROUNDING] Attaching {tool_type} tool with mode={grounding_mode}")
+                params["tools"] = [{"type": tool_type}]
+                metadata["response_api_tool_type"] = tool_type
+                
+                # Set tool_choice based on mode
+                if grounding_mode == "REQUIRED":
+                    params["tool_choice"] = "required"  # Force tool use
+                else:
+                    params["tool_choice"] = "auto"  # Allow model to decide
             
             # Add guardrail instruction to ensure final message after tools
             max_web_searches = int(os.getenv("OPENAI_MAX_WEB_SEARCHES", "2"))
@@ -824,36 +834,61 @@ class OpenAIAdapter:
                         ("hosted tool 'web_search'" in low and "not supported" in low) or
                         ("hosted tool 'web_search_preview'" in low and "not supported" in low)
                     ):
-                        # Cache capability to prevent future tool attachment for this model
-                        logger.debug(f"[OPENAI_GROUNDING] Web_search not supported (400 error), caching and falling back")
-                        self._web_search_support[model_name] = False
-                        metadata["grounding_not_supported"] = True
-                        metadata["why_not_grounded"] = "web_search unsupported for model"
+                        # Current tool type failed, try alternate
+                        current_tool = params.get("tools", [{}])[0].get("type", "")
+                        alternate_tool = "web_search" if current_tool == "web_search_preview" else "web_search_preview"
                         
-                        if grounding_mode == "REQUIRED":
-                            # QA ceiling must fail-closed per PRD
-                            logger.debug(f"[OPENAI_GROUNDING] Failing REQUIRED mode due to 400 error")
-                            raise GroundingNotSupportedError(
-                                f"GROUNDING_NOT_SUPPORTED: Model {request.model} does not support web_search (REQUIRED mode)"
-                            ) from e
+                        logger.info(f"[TOOL_FALLBACK] {current_tool} not supported, trying {alternate_tool}")
+                        metadata["tool_variant_retry"] = True
                         
-                        # Preferred/Auto: proceed ungrounded realistically (no silent hacks)
-                        logger.warning(f"Grounding not supported for {request.model}, proceeding without")
-                        logger.debug(f"[OPENAI_GROUNDING] Retrying without tools (fallback)")
-                        ungrounded_params = dict(call_params)
-                        ungrounded_params.pop("tools", None)
-                        ungrounded_params.pop("tool_choice", None)
+                        # Retry with alternate tool type
+                        retry_params = dict(call_params)
+                        retry_params["tools"] = [{"type": alternate_tool}]
+                        
                         try:
-                            retry_response = await client_with_timeout.responses.create(**ungrounded_params)
-                            logger.debug(f"[OPENAI_GROUNDING] Ungrounded fallback successful")
+                            retry_response = await client_with_timeout.responses.create(**retry_params)
+                            # Cache the working tool type
+                            self._set_cached_tool_type(model_name, alternate_tool)
+                            metadata["response_api_tool_type"] = alternate_tool
+                            logger.info(f"[TOOL_FALLBACK] Success with {alternate_tool}")
                             return retry_response
+                            
                         except Exception as retry_e:
-                            logger.warning(f"Ungrounded retry failed: {retry_e}")
+                            # Check if alternate also failed with "not supported"
+                            retry_msg = str(retry_e).lower()
+                            if "not supported" in retry_msg:
+                                logger.warning(f"[TOOL_FALLBACK] Both tool types unsupported for {model_name}")
+                                # Cache as unsupported (both variants failed)
+                                self._set_cached_tool_type(model_name, "unsupported")
+                                metadata["grounding_not_supported"] = True
+                                metadata["why_not_grounded"] = "hosted_web_search_not_supported_for_model"
+                                
+                                if grounding_mode == "REQUIRED":
+                                    logger.debug(f"[OPENAI_GROUNDING] Failing REQUIRED mode - both variants rejected")
+                                    raise GroundingNotSupportedError(
+                                        f"GROUNDING_NOT_SUPPORTED: Model {request.model} does not support any web_search variant (REQUIRED mode)"
+                                    ) from e
+                                
+                                # AUTO: proceed ungrounded
+                                logger.warning(f"Grounding not supported for {request.model}, proceeding without")
+                                ungrounded_params = dict(call_params)
+                                ungrounded_params.pop("tools", None)
+                                ungrounded_params.pop("tool_choice", None)
+                                try:
+                                    final_response = await client_with_timeout.responses.create(**ungrounded_params)
+                                    logger.debug(f"[OPENAI_GROUNDING] Ungrounded fallback successful")
+                                    return final_response
+                                except Exception as final_e:
+                                    logger.warning(f"Ungrounded retry failed: {final_e}")
+                                    raise final_e from e
+                            else:
+                                # Different error on retry - propagate
+                                logger.warning(f"Alternate tool retry failed with different error: {retry_e}")
+                                raise retry_e from e
                     
-                    # Check if this is a preview compatibility issue
-                    elif "web_search_preview" in msg and os.getenv("ALLOW_PREVIEW_COMPAT", "true").lower() == "true":
-                        logger.info("[COMPAT] Retrying with web_search_preview due to API requirement")
-                        # Retry with preview tool using SDK
+                    # No longer need separate preview check since we handle both in fallback above
+                    else:
+                        # Not a web_search support issue
                         retry_params = dict(call_params)
                         retry_params["tools"] = [{"type": "web_search_preview"}]
                         try:
@@ -874,6 +909,11 @@ class OpenAIAdapter:
         # Detect grounding if tools were used
         if request.grounded:
             grounded_effective, tool_call_count, web_grounded, web_search_count = self._detect_grounding(response)
+            
+            # Add comprehensive telemetry fields
+            metadata["grounded_effective"] = grounded_effective
+            metadata["tool_call_count"] = tool_call_count
+            metadata["web_search_count"] = web_search_count
             
             logger.debug(f"[OPENAI_GROUNDING] Response analysis: grounded_effective={grounded_effective}, "
                         f"tool_calls={tool_call_count}, web_searches={web_search_count}")
@@ -1190,14 +1230,20 @@ class OpenAIAdapter:
             else:
                 metadata.setdefault("why_no_content", "no_text_after_retries_ungrounded")
         
-        # --- ALS propagation into response metadata ---
+        # --- ALS and model adjustment propagation into response metadata ---
         try:
             req_meta = getattr(request, 'metadata', {}) or {}
-            if isinstance(req_meta, dict) and req_meta.get('als_present'):
-                # copy whitelisted ALS fields
-                for k in ('als_present','als_block_sha256','als_variant_id','seed_key_id','als_country','als_locale','als_nfc_length','als_template_id'):
-                    if k in req_meta:
-                        metadata[k] = req_meta[k]
+            if isinstance(req_meta, dict):
+                # Copy ALS fields if present
+                if req_meta.get('als_present'):
+                    for k in ('als_present','als_block_sha256','als_variant_id','seed_key_id','als_country','als_locale','als_nfc_length','als_template_id'):
+                        if k in req_meta:
+                            metadata[k] = req_meta[k]
+                
+                # Copy model adjustment fields if present
+                if req_meta.get('model_adjusted_for_grounding'):
+                    metadata['model_adjusted_for_grounding'] = req_meta['model_adjusted_for_grounding']
+                    metadata['original_model'] = req_meta.get('original_model')
         except Exception as _:
             pass
         

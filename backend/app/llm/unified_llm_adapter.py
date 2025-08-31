@@ -110,6 +110,33 @@ class UnifiedLLMAdapter:
                     f"Note: We don't silently rewrite models (Adapter PRD)"
                 )
         
+        # Step 2.6: Model adjustment for grounded requests (opt-in policy)
+        # When grounded=True and model is gpt-5-chat-latest, optionally swap to gpt-5
+        model_adjust_enabled = os.getenv("MODEL_ADJUST_FOR_GROUNDING", "false").lower() == "true"
+        
+        if (request.vendor == "openai" and 
+            request.grounded is True and 
+            request.model == "gpt-5-chat-latest" and 
+            model_adjust_enabled):
+            
+            # Store original model for telemetry
+            if not hasattr(request, 'metadata'):
+                request.metadata = {}
+            request.metadata['model_adjusted_for_grounding'] = True
+            request.metadata['original_model'] = request.model
+            
+            # Adjust to gpt-5 for better grounding support
+            request.model = "gpt-5"
+            logger.info(f"[MODEL_ADJUST] Adjusted model for grounding: gpt-5-chat-latest -> gpt-5")
+            
+            # Check if gpt-5 is in allowlist
+            if request.model not in allowed_models:
+                raise ValueError(
+                    f"Model adjustment failed: {request.model} not in allowlist\n"
+                    f"Allowed models: {allowed_models}\n"
+                    f"Add gpt-5 to ALLOWED_OPENAI_MODELS to enable grounded model adjustment"
+                )
+        
         # Double-check with centralized validation
         is_valid, error_msg = validate_model(request.vendor, request.model)
         if not is_valid:
@@ -419,7 +446,9 @@ class UnifiedLLMAdapter:
                 
                 # Model info
                 'model_fingerprint': response.model_fingerprint if hasattr(response, 'model_fingerprint') else None,
-                'normalized_model': request.model
+                'normalized_model': request.model,
+                'model_adjusted_for_grounding': request.metadata.get('model_adjusted_for_grounding', False) if hasattr(request, 'metadata') else False,
+                'original_model': request.metadata.get('original_model') if hasattr(request, 'metadata') else None
             }
             
             # Cheap derived metric for dashboards - citations count
