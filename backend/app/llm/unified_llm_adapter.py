@@ -42,9 +42,26 @@ class UnifiedLLMAdapter:
     """
     
     def __init__(self):
-        self.openai_adapter = OpenAIAdapter()
-        self.vertex_adapter = VertexAdapter()
+        # Lazy-init adapters to prevent boot failures when env vars missing
+        self._openai_adapter = None
+        self._vertex_adapter = None
         self.als_builder = ALSBuilder()
+    
+    @property
+    def openai_adapter(self):
+        """Lazy-init OpenAI adapter on first use"""
+        if self._openai_adapter is None:
+            from app.llm.adapters.openai_adapter import OpenAIAdapter
+            self._openai_adapter = OpenAIAdapter()
+        return self._openai_adapter
+    
+    @property
+    def vertex_adapter(self):
+        """Lazy-init Vertex adapter on first use"""
+        if self._vertex_adapter is None:
+            from app.llm.adapters.vertex_adapter import VertexAdapter
+            self._vertex_adapter = VertexAdapter()
+        return self._vertex_adapter
     
     async def complete(
         self,
@@ -79,6 +96,8 @@ class UnifiedLLMAdapter:
                 raise ValueError(f"Cannot infer vendor for model: {request.model}")
         
         # Step 2.5: Strict model validation with guardrails
+        # Store original model before normalization for adjustment check
+        original_model_pre_norm = request.model
         # Normalize model
         request.model = normalize_model(request.vendor, request.model)
         
@@ -116,7 +135,7 @@ class UnifiedLLMAdapter:
         
         if (request.vendor == "openai" and 
             request.grounded is True and 
-            request.model == "gpt-5-chat-latest" and 
+            original_model_pre_norm == "gpt-5-chat-latest" and  # Check pre-normalized model
             model_adjust_enabled):
             
             # Store original model for telemetry
@@ -498,23 +517,8 @@ class UnifiedLLMAdapter:
             # Log but don't fail the request
             logger.error(f"Failed to emit telemetry: {e}")
     
-    def validate_model(self, vendor: str, model: str) -> bool:
-        """
-        Validate that a model is supported by a vendor
-        
-        Args:
-            vendor: Provider name (openai, vertex)
-            model: Model identifier
-            
-        Returns:
-            True if model is supported
-        """
-        if vendor == "openai":
-            # ONLY GPT-5 is supported for OpenAI
-            return model == "gpt-5"
-        elif vendor == "vertex":
-            return model.startswith("gemini-")
-        return False
+    # REMOVED: Shadow validate_model that differs from centralized validator
+    # Use app.llm.models.validate_model instead
     
     def get_vendor_for_model(self, model: str) -> Optional[str]:
         """

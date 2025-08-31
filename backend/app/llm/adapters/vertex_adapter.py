@@ -293,12 +293,34 @@ def _sanitize_metadata(metadata: Dict[str, Any]) -> Dict[str, Any]:
         elif isinstance(value, dict):
             clean_metadata[key] = _sanitize_metadata(value)
         elif isinstance(value, list):
-            clean_metadata[key] = [
-                item for item in value 
-                if isinstance(item, (str, int, float, bool, type(None), dict))
-            ]
+            # Deep-sanitize lists: recursively clean nested dicts
+            clean_list = []
+            for item in value:
+                if isinstance(item, (str, int, float, bool, type(None))):
+                    clean_list.append(item)
+                elif isinstance(item, dict):
+                    # Recursively sanitize nested dict
+                    clean_list.append(_sanitize_metadata(item))
+                elif isinstance(item, list):
+                    # Handle nested lists recursively
+                    clean_list.append(_sanitize_list(item))
+                # Skip SDK objects
+            clean_metadata[key] = clean_list
         # Skip SDK objects like Tool, FunctionTool, GoogleSearch, etc.
     return clean_metadata
+
+def _sanitize_list(items: list) -> list:
+    """Helper to recursively sanitize lists"""
+    clean_list = []
+    for item in items:
+        if isinstance(item, (str, int, float, bool, type(None))):
+            clean_list.append(item)
+        elif isinstance(item, dict):
+            clean_list.append(_sanitize_metadata(item))
+        elif isinstance(item, list):
+            clean_list.append(_sanitize_list(item))
+        # Skip SDK objects
+    return clean_list
 
 def _extract_vertex_citations(resp: Any) -> list:
     """
@@ -995,7 +1017,12 @@ Provide your response as valid JSON with appropriate keys for the information.""
             step1_text = _extract_text_from_candidates(step1_resp)
             
             # Step 2: Reshape to JSON (NO TOOLS)
-            original_request = req.messages[-1].get("content", "") if req.messages else ""
+            # Get the last USER message (not just last message which could be assistant)
+            original_request = ""
+            for msg in reversed(req.messages):
+                if msg.get("role") == "user":
+                    original_request = msg.get("content", "")
+                    break
             logger.debug(f"[VERTEX_GROUNDING] Starting Step 2 JSON reshape")
             if self.use_genai and self.genai_client:
                 step2_resp, attestation = await self._step2_reshape_json_genai(
