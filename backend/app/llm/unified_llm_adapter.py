@@ -68,7 +68,9 @@ class UnifiedLLMAdapter:
         
         # Apply ALS if we have context and it's not already applied
         if hasattr(request, 'als_context') and request.als_context and not als_already_applied:
+            logger.debug(f"[ALS_DEBUG] Applying ALS: country={getattr(request.als_context, 'country_code', 'N/A')}")
             request = self._apply_als(request)
+            logger.debug(f"[ALS_DEBUG] After _apply_als: metadata={getattr(request, 'metadata', {})}")
         
         # Step 2: Infer vendor if missing
         if not request.vendor:
@@ -145,6 +147,11 @@ class UnifiedLLMAdapter:
                    f"grounded={request.grounded}, timeout={timeout}s, "
                    f"template_id={request.template_id}, run_id={request.run_id}")
         
+        # Debug logging for grounding attempts
+        if request.grounded:
+            logger.debug(f"[GROUNDING_ATTEMPT] Attempting grounded request: vendor={request.vendor}, "
+                        f"model={request.model}, json_mode={getattr(request, 'json_mode', False)}")
+        
         try:
             if request.vendor == "openai":
                 response = await self.openai_adapter.complete(request, timeout=timeout)
@@ -155,6 +162,35 @@ class UnifiedLLMAdapter:
             # Convert adapter exceptions to LLM response format
             error_msg = str(e)
             logger.error(f"Adapter failed for vendor={request.vendor}: {error_msg}")
+            
+            # Debug logging for grounding failures
+            if request.grounded:
+                if "GROUNDING_NOT_SUPPORTED" in error_msg:
+                    logger.debug(f"[GROUNDING_FALLBACK] Grounding not supported for {request.vendor}/{request.model}, "
+                               f"will proceed ungrounded")
+                else:
+                    logger.debug(f"[GROUNDING_FAILED] Grounding attempt failed: {error_msg}")
+            
+            # ---- FAIL-CLOSED for Required grounding per PRD ----
+            # If the caller requested REQUIRED grounding, we must not swallow grounding errors.
+            grounding_mode = None
+            try:
+                if hasattr(request, "meta") and isinstance(request.meta, dict):
+                    grounding_mode = request.meta.get("grounding_mode")
+                else:
+                    grounding_mode = getattr(request, "grounding_mode", None)
+            except Exception:
+                grounding_mode = None
+            
+            # Known grounding failure types to bubble up
+            _fatal_markers = (
+                "GROUNDING_NOT_SUPPORTED",
+                "GROUNDING_REQUIRED_ERROR",
+            )
+            if (grounding_mode == "REQUIRED") and any(m in error_msg for m in _fatal_markers):
+                # Re-raise so HTTP layer / test harness can fail the cell hard
+                logger.debug(f"[GROUNDING_REQUIRED] Re-raising error for REQUIRED mode: {error_msg}")
+                raise
             
             # Return error response instead of letting exception bubble up
             from app.llm.types import LLMResponse
@@ -173,7 +209,31 @@ class UnifiedLLMAdapter:
                 error_message=error_msg
             )
         
-        # Step 3: Emit telemetry if session provided
+        # Debug logging for successful grounding
+        if request.grounded and hasattr(response, 'grounded_effective'):
+            if response.grounded_effective:
+                tool_count = response.metadata.get('tool_call_count', 0) if hasattr(response, 'metadata') else 0
+                logger.debug(f"[GROUNDING_SUCCESS] Grounding successful: vendor={request.vendor}, "
+                           f"model={request.model}, tool_calls={tool_count}")
+            else:
+                logger.debug(f"[GROUNDING_UNUSED] Request was grounded but no tools were invoked")
+        
+        # Step 3: Router-level ALS hardening - ensure ALS metadata is propagated BEFORE telemetry
+        # This guarantees ALS visibility even if a provider adapter forgets to copy them
+        try:
+            if hasattr(request, 'metadata') and isinstance(request.metadata, dict) and request.metadata.get('als_present'):
+                if not hasattr(response, 'metadata') or response.metadata is None:
+                    response.metadata = {}
+                for k in ('als_present', 'als_block_sha256', 'als_variant_id', 'seed_key_id',
+                          'als_country', 'als_locale', 'als_nfc_length', 'als_template_id'):
+                    if k in request.metadata and k not in response.metadata:
+                        response.metadata[k] = request.metadata[k]
+                response.metadata['als_mirrored_by_router'] = True
+                logger.debug(f"[ALS_HARDENING] Propagated ALS metadata: als_present={response.metadata.get('als_present')}")
+        except Exception as e:
+            logger.warning(f"[ALS_HARDENING] Failed to propagate ALS metadata: {e}")
+        
+        # Step 4: Emit telemetry if session provided
         if session:
             await self._emit_telemetry(request, response, session)
         
@@ -196,12 +256,18 @@ class UnifiedLLMAdapter:
         """
         als_context = request.als_context
         
-        if not als_context or not isinstance(als_context, dict):
+        if not als_context:
             return request
         
         # Step 1: Canonicalize locale (ISO uppercase)
-        country_code = als_context.get('country_code', 'US').upper()
-        locale = als_context.get('locale', f'en-{country_code}')
+        # Handle both dict and ALSContext object
+        if isinstance(als_context, dict):
+            country_code = als_context.get('country_code', 'US').upper()
+            locale = als_context.get('locale', f'en-{country_code}')
+        else:
+            # ALSContext object
+            country_code = getattr(als_context, 'country_code', 'US').upper()
+            locale = getattr(als_context, 'locale', f'en-{country_code}')
         
         # Step 2: Deterministic variant selection using HMAC
         import hmac
@@ -331,8 +397,12 @@ class UnifiedLLMAdapter:
                 'als_country': request.metadata.get('als_country') if hasattr(request, 'metadata') else None,
                 'als_nfc_length': request.metadata.get('als_nfc_length') if hasattr(request, 'metadata') else None,
                 
-                # Grounding fields
-                'grounding_mode_requested': 'REQUIRED' if request.grounded else 'NONE',
+                # Grounding fields - report actual requested mode
+                'grounding_mode_requested': (
+                    request.meta.get('grounding_mode') 
+                    if hasattr(request, 'meta') and isinstance(request.meta, dict) and request.meta.get('grounding_mode')
+                    else (getattr(request, 'grounding_mode', None) or ('AUTO' if getattr(request, 'grounded', False) else 'NONE'))
+                ),
                 'grounded_effective': response.grounded_effective,
                 'tool_call_count': response.metadata.get('tool_call_count', 0) if hasattr(response, 'metadata') else 0,
                 'why_not_grounded': response.metadata.get('why_not_grounded') if hasattr(response, 'metadata') else None,
@@ -351,6 +421,13 @@ class UnifiedLLMAdapter:
                 'model_fingerprint': response.model_fingerprint if hasattr(response, 'model_fingerprint') else None,
                 'normalized_model': request.model
             }
+            
+            # Cheap derived metric for dashboards - citations count
+            try:
+                c = response.metadata.get('citations') if hasattr(response, 'metadata') else None
+                meta_json['citations_count'] = len(c) if isinstance(c, list) else 0
+            except Exception:
+                meta_json['citations_count'] = 0
             
             # Log comprehensive telemetry
             logger.info(
