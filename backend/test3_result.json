@@ -1,0 +1,8 @@
+{
+    "error": {
+        "message": "Hosted tool 'web_search_preview' is not supported with gpt-5-chat-latest.",
+        "type": "invalid_request_error",
+        "param": "tools",
+        "code": null
+    }
+}

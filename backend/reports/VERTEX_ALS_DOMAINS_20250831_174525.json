@@ -1,0 +1,65 @@
+{
+  "timestamp": "20250831_174525",
+  "results": {
+    "BASELINE": {
+      "grounded": true,
+      "citations": 12,
+      "tld_counts": {
+        ".com": 12
+      },
+      "sample_domains": [
+        "endocrine.org",
+        "scitechdaily.com",
+        "nih.gov",
+        "nih.gov",
+        "theguardian.com"
+      ]
+    },
+    "CH": {
+      "grounded": true,
+      "citations": 14,
+      "tld_counts": {
+        ".com": 14
+      },
+      "sample_domains": [
+        "conexiant.com",
+        "endocrine.org",
+        "mdpi.com",
+        "nih.gov",
+        "townsendletter.com"
+      ]
+    },
+    "DE": {
+      "grounded": true,
+      "citations": 10,
+      "tld_counts": {
+        ".com": 10
+      },
+      "sample_domains": [
+        "endocrine.org",
+        "jwatch.org",
+        "theguardian.com",
+        "nih.gov",
+        "nih.gov"
+      ]
+    },
+    "US": {
+      "grounded": true,
+      "citations": 10,
+      "tld_counts": {
+        ".com": 10
+      },
+      "sample_domains": [
+        "jwatch.org",
+        "endocrine.org",
+        "sochob.cl",
+        "nih.gov",
+        "mdpi.com"
+      ]
+    }
+  },
+  "analysis": {
+    "domain_extraction": "Using source_domain from titles",
+    "als_effects": false
+  }
+}

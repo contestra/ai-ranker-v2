@@ -1,10 +1,13 @@
 """
-Vertex AI adapter for Gemini 2.5-pro ONLY.
+Vertex AI adapter for Gemini models via Vertex AI.
+Default allowed models: gemini-2.5-pro, gemini-2.0-flash
+Configurable via ALLOWED_VERTEX_MODELS env var.
 Supports both vertexai SDK and google-genai for API compatibility.
 Implements two-step grounded JSON policy as required.
 """
 import json
 import os
+import re
 import time
 import logging
 import asyncio
@@ -39,18 +42,101 @@ def _extract_vertex_citations2(resp) -> list:
     citations = []
     def add(item: dict):
         if not item: return
-        if "url" in item and "uri" not in item:
-            item["uri"] = item["url"]
-        if "uri" in item:
+        
+        # Look for non-redirect URLs first (web.uri, sourceUrl, pageUrl)
+        true_url = None
+        redirect_url = None
+        
+        # Check for direct URLs in various fields
+        for url_field in ["sourceUrl", "pageUrl", "source_uri"]:
+            if url_field in item and item[url_field]:
+                url = item[url_field]
+                # Check if it's not a Vertex redirect
+                if "vertexaisearch.cloud.google.com" not in url:
+                    true_url = url
+                    break
+        
+        # Check nested web/source/reference for non-redirect URLs
+        if not true_url:
+            for nested_key in ["web", "source", "reference"]:
+                if nested_key in item and isinstance(item[nested_key], dict):
+                    nested = item[nested_key]
+                    for url_field in ["uri", "url", "sourceUrl", "pageUrl"]:
+                        if url_field in nested and nested[url_field]:
+                            url = nested[url_field]
+                            if "vertexaisearch.cloud.google.com" not in url:
+                                true_url = url
+                                break
+                    if true_url:
+                        break
+        
+        # Fall back to redirect URL if no true URL found
+        if not true_url:
+            if "url" in item and "uri" not in item:
+                item["uri"] = item["url"]
+            redirect_url = item.get("uri") or item.get("url")
+        
+        final_url = true_url or redirect_url
+        if final_url:
             # Normalize to our standard format
-            citations.append({
+            citation = {
                 "provider": "vertex",
-                "url": item.get("uri"),
+                "url": final_url,  # Prefer true URL over redirect
                 "title": item.get("title"),
                 "snippet": item.get("snippet") or item.get("text"),
                 "source_type": "google_search",
                 "rank": len(citations) + 1
-            })
+            }
+            
+            # If we used a redirect URL, note it
+            if not true_url and redirect_url:
+                citation["is_redirect"] = True
+            
+            # Extract actual domain from various sources
+            source_domain = None
+            
+            # 1. Try to extract from true URL if available
+            if true_url:
+                from urllib.parse import urlparse
+                try:
+                    parsed = urlparse(true_url)
+                    if parsed.netloc:
+                        source_domain = parsed.netloc.lower()
+                        # Remove www. prefix
+                        if source_domain.startswith("www."):
+                            source_domain = source_domain[4:]
+                except:
+                    pass
+            
+            # 2. Try to extract from title if it looks like a domain
+            if not source_domain:
+                title = item.get("title")
+                if title and '.' in title:
+                    # Title appears to be a domain (e.g., "consensus.app", "nih.gov", "webmd.com")
+                    domain_match = re.match(r'^([a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)+)', title)
+                    if domain_match:
+                        source_domain = domain_match.group(1)
+            
+            # 3. Try to extract from nested metadata
+            if not source_domain:
+                # Check for domain in nested structures
+                for nested_key in ["web", "source", "reference"]:
+                    if nested_key in item and isinstance(item[nested_key], dict):
+                        nested = item[nested_key]
+                        # Look for domain field
+                        if "domain" in nested:
+                            source_domain = nested["domain"]
+                            break
+                        # Look for host field
+                        if "host" in nested:
+                            source_domain = nested["host"]
+                            break
+            
+            # Add source_domain if found
+            if source_domain:
+                citation["source_domain"] = source_domain
+            
+            citations.append(citation)
     
     try:
         cands = getattr(resp, "candidates", None) or []
@@ -386,14 +472,24 @@ def _extract_vertex_citations(resp: Any) -> list:
                         snippet = getattr(chunk, "snippet", None) or getattr(chunk, "text", None) or getattr(chunk, "content", None)
                         
                         if url:
-                            out.append({
+                            citation = {
                                 "provider": "vertex",
                                 "url": url,
                                 "title": title,
                                 "snippet": snippet,
                                 "source_type": "google_search",
                                 "rank": rank
-                            })
+                            }
+                            
+                            # Extract actual domain from title if it looks like a domain
+                            if title and '.' in title:
+                                # Title appears to be a domain (e.g., "consensus.app", "nih.gov", "webmd.com")
+                                # Even if it has extra text, try to extract the domain part
+                                domain_match = re.match(r'^([a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)+)', title)
+                                if domain_match:
+                                    citation["source_domain"] = domain_match.group(1)
+                            
+                            out.append(citation)
                             rank += 1
             
             # Try grounding_supports if no citations found yet
@@ -420,14 +516,24 @@ def _extract_vertex_citations(resp: Any) -> list:
                         snippet = getattr(support, "snippet", None) or getattr(support, "text", None) or getattr(support, "content", None)
                         
                         if url:
-                            out.append({
+                            citation = {
                                 "provider": "vertex",
                                 "url": url,
                                 "title": title,
                                 "snippet": snippet,
                                 "source_type": "google_search",
                                 "rank": rank
-                            })
+                            }
+                            
+                            # Extract actual domain from title if it looks like a domain
+                            if title and '.' in title:
+                                # Title appears to be a domain (e.g., "consensus.app", "nih.gov", "webmd.com")
+                                # Even if it has extra text, try to extract the domain part
+                                domain_match = re.match(r'^([a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)+)', title)
+                                if domain_match:
+                                    citation["source_domain"] = domain_match.group(1)
+                            
+                            out.append(citation)
                             rank += 1
         
         # 2) Dict/camelCase path (google-genai model_dump)
@@ -469,14 +575,24 @@ def _extract_vertex_citations(resp: Any) -> list:
                         snippet = chunk.get("snippet") or chunk.get("text") or chunk.get("content")
                         
                         if url:
-                            out.append({
+                            citation = {
                                 "provider": "vertex",
                                 "url": url,
                                 "title": title,
                                 "snippet": snippet,
                                 "source_type": "google_search",
                                 "rank": rank
-                            })
+                            }
+                            
+                            # Extract actual domain from title if it looks like a domain
+                            if title and '.' in title:
+                                # Title appears to be a domain (e.g., "consensus.app", "nih.gov", "webmd.com")
+                                # Even if it has extra text, try to extract the domain part
+                                domain_match = re.match(r'^([a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)+)', title)
+                                if domain_match:
+                                    citation["source_domain"] = domain_match.group(1)
+                            
+                            out.append(citation)
                             rank += 1
                 
                 # Try grounding_supports if still no citations
@@ -494,14 +610,24 @@ def _extract_vertex_citations(resp: Any) -> list:
                         snippet = support.get("snippet") or support.get("text") or support.get("content")
                         
                         if url:
-                            out.append({
+                            citation = {
                                 "provider": "vertex",
                                 "url": url,
                                 "title": title,
                                 "snippet": snippet,
                                 "source_type": "google_search",
                                 "rank": rank
-                            })
+                            }
+                            
+                            # Extract actual domain from title if it looks like a domain
+                            if title and '.' in title:
+                                # Title appears to be a domain (e.g., "consensus.app", "nih.gov", "webmd.com")
+                                # Even if it has extra text, try to extract the domain part
+                                domain_match = re.match(r'^([a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)+)', title)
+                                if domain_match:
+                                    citation["source_domain"] = domain_match.group(1)
+                            
+                            out.append(citation)
                             rank += 1
     except Exception as e:
         logger.debug(f"Error extracting Vertex citations: {e}")
@@ -548,6 +674,18 @@ class VertexAdapter:
         self.use_genai = os.getenv("VERTEX_USE_GENAI_CLIENT", "true").lower() == "true" and GENAI_AVAILABLE
         self.genai_client = None
         
+        # Startup check for google-genai availability
+        if not GENAI_AVAILABLE:
+            logger.warning(
+                "[VERTEX_STARTUP] google-genai not available. Grounded requests will fail. "
+                "To fix: pip install google-genai>=0.8.3"
+            )
+        elif os.getenv("VERTEX_USE_GENAI_CLIENT", "true").lower() == "false":
+            logger.warning(
+                "[VERTEX_STARTUP] google-genai disabled by VERTEX_USE_GENAI_CLIENT=false. "
+                "Grounded requests will fail. To fix: unset or set VERTEX_USE_GENAI_CLIENT=true"
+            )
+        
         if self.use_genai:
             try:
                 # Create genai client in Vertex mode
@@ -557,10 +695,20 @@ class VertexAdapter:
                     location=self.location,
                     http_options=genai_types.HttpOptions(api_version="v1")
                 )
+                logger.info(f"[VERTEX_STARTUP] google-genai client initialized successfully (grounding enabled)")
                 logger.info(f"Initialized google-genai client for Vertex (project={self.project}, location={self.location})")
             except Exception as e:
-                logger.warning(f"Failed to initialize google-genai client: {e}, falling back to vertexai SDK")
+                logger.error(
+                    f"[VERTEX_STARTUP] Failed to initialize google-genai client: {e}. "
+                    f"Grounded requests will fail."
+                )
                 self.use_genai = False
+        else:
+            logger.warning(
+                f"[VERTEX_STARTUP] google-genai not initialized. "
+                f"GENAI_AVAILABLE={GENAI_AVAILABLE}, VERTEX_USE_GENAI_CLIENT={os.getenv('VERTEX_USE_GENAI_CLIENT', 'true')}. "
+                f"Grounded requests will fail with clear error."
+            )
         
         # Log SDK version for debugging
         try:
@@ -987,6 +1135,17 @@ Provide your response as valid JSON with appropriate keys for the information.""
             grounding_mode = req.meta.get("grounding_mode", grounding_mode)
         # Surface requested mode for QA/telemetry parity
         metadata["grounding_mode_requested"] = grounding_mode
+        
+        # CRITICAL: Fail-closed for grounded requests without google-genai
+        # The vertexai SDK fallback doesn't properly support grounding
+        if is_grounded and not self.use_genai:
+            error_msg = (
+                "GROUNDING_REQUIRES_GENAI: Grounded requests require google-genai client. "
+                f"Current state: GENAI_AVAILABLE={GENAI_AVAILABLE}, use_genai={self.use_genai}. "
+                "To fix: pip install google-genai>=0.8.3 and ensure VERTEX_USE_GENAI_CLIENT != 'false'"
+            )
+            logger.error(f"[VERTEX_GROUNDING] {error_msg}")
+            raise ValueError(error_msg)
         
         # Determine two-step requirement
         needs_two_step = is_grounded and is_json_mode

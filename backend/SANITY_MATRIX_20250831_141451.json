@@ -1,0 +1,135 @@
+{
+  "timestamp": "2025-08-31T14:14:01.350780",
+  "matrix_results": [
+    {
+      "test": "Test 1: model=gpt-5-chat-latest, grounded=True, mode=AUTO",
+      "model_sent": "gpt-5-chat-latest",
+      "grounded": true,
+      "grounding_mode": "AUTO",
+      "expected_adjustment": true,
+      "actual_adjustment": true,
+      "adjustment_correct": true,
+      "original_model": "gpt-5-chat-latest",
+      "grounding_attempted": false,
+      "grounded_effective": false,
+      "tool_type": "web_search_preview",
+      "elapsed_seconds": 2.26,
+      "status": "success"
+    },
+    {
+      "test": "Test 2: model=gpt-5-chat-latest, grounded=True, mode=REQUIRED",
+      "model_sent": "gpt-5-chat-latest",
+      "grounded": true,
+      "grounding_mode": "REQUIRED",
+      "status": "error",
+      "error": "GROUNDING_REQUIRED_ERROR: Grounding not effective (mode=REQUIRED). Reason: tool_not_invoked"
+    },
+    {
+      "test": "Test 3: model=gpt-5-chat-latest, grounded=False, mode=None",
+      "model_sent": "gpt-5-chat-latest",
+      "grounded": false,
+      "grounding_mode": null,
+      "expected_adjustment": false,
+      "actual_adjustment": false,
+      "adjustment_correct": true,
+      "original_model": null,
+      "grounding_attempted": false,
+      "grounded_effective": false,
+      "tool_type": null,
+      "elapsed_seconds": 1.41,
+      "status": "success"
+    },
+    {
+      "test": "Test 4: model=gpt-5, grounded=True, mode=AUTO",
+      "model_sent": "gpt-5",
+      "grounded": true,
+      "grounding_mode": "AUTO",
+      "expected_adjustment": false,
+      "actual_adjustment": false,
+      "adjustment_correct": true,
+      "original_model": null,
+      "grounding_attempted": false,
+      "grounded_effective": false,
+      "tool_type": "web_search_preview",
+      "elapsed_seconds": 1.23,
+      "status": "success"
+    },
+    {
+      "test": "Test 5: model=gpt-5, grounded=True, mode=REQUIRED",
+      "model_sent": "gpt-5",
+      "grounded": true,
+      "grounding_mode": "REQUIRED",
+      "status": "error",
+      "error": "GROUNDING_NOT_SUPPORTED: Model gpt-5-chat-latest does not support any web_search variant (REQUIRED mode)"
+    },
+    {
+      "test": "Test 6: model=gpt-5, grounded=False, mode=None",
+      "model_sent": "gpt-5",
+      "grounded": false,
+      "grounding_mode": null,
+      "expected_adjustment": false,
+      "actual_adjustment": false,
+      "adjustment_correct": true,
+      "original_model": null,
+      "grounding_attempted": false,
+      "grounded_effective": false,
+      "tool_type": null,
+      "elapsed_seconds": 0.57,
+      "status": "success"
+    }
+  ],
+  "cache_integrity": {
+    "gpt-5-chat-latest": {
+      "results": [
+        {
+          "attempt": 1,
+          "tool_type": "web_search_preview",
+          "elapsed": 3.78
+        },
+        {
+          "attempt": 2,
+          "tool_type": "web_search_preview",
+          "elapsed": 3.57
+        },
+        {
+          "attempt": 3,
+          "tool_type": "web_search_preview",
+          "elapsed": 32.19
+        }
+      ],
+      "consistent": true,
+      "tool_type": "web_search_preview"
+    },
+    "gpt-5": {
+      "results": [
+        {
+          "attempt": 1,
+          "tool_type": null,
+          "elapsed": 0.91
+        },
+        {
+          "attempt": 2,
+          "tool_type": null,
+          "elapsed": 1.0
+        },
+        {
+          "attempt": 3,
+          "tool_type": null,
+          "elapsed": 1.25
+        }
+      ],
+      "consistent": true,
+      "tool_type": null
+    }
+  },
+  "model_adjustment": {},
+  "summary": {
+    "total_tests": 6,
+    "model_adjustment_correct": "4/4",
+    "grounding_attempted": "0/4",
+    "cache_consistent": "2/2",
+    "errors": 2,
+    "empty_results": 0,
+    "all_passed": false
+  }
+}

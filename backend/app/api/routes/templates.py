@@ -191,6 +191,8 @@ async def run_template_simple(
     Stores all runs to the database for tracking and analysis.
     """
     from app.services.template_runner import execute_template_run
+    from app.llm.errors import GroundingNotSupportedError, GroundingRequiredFailedError
+    from fastapi import HTTPException
     
     try:
         return await execute_template_run(
@@ -199,6 +201,18 @@ async def run_template_simple(
             request=request,
             org_id=x_organization_id,
             user_id=x_user_id
+        )
+    except GroundingNotSupportedError as e:
+        # 424 Failed Dependency - grounding required but not supported
+        raise HTTPException(
+            status_code=424,
+            detail={"error_code": "GROUNDING_NOT_SUPPORTED", "message": str(e)}
+        )
+    except GroundingRequiredFailedError as e:
+        # 424 Failed Dependency - grounding required but no evidence produced
+        raise HTTPException(
+            status_code=424,
+            detail={"error_code": "GROUNDING_REQUIRED_FAILED", "message": str(e)}
         )
     except ValueError as e:
         errors.not_found(code="TEMPLATE_NOT_FOUND", detail=str(e))

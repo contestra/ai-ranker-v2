@@ -12,9 +12,11 @@ OPENAI_ALLOWED_MODELS = {
 # Default OpenAI model
 OPENAI_DEFAULT_MODEL = "gpt-5-chat-latest"
 
-# Vertex/Gemini models - Only 2.5-pro via Vertex
+# Vertex/Gemini models - Default allowed models via Vertex
+# Can be overridden via ALLOWED_VERTEX_MODELS env var
 VERTEX_ALLOWED_MODELS = {
-    "publishers/google/models/gemini-2.5-pro"
+    "publishers/google/models/gemini-2.5-pro",
+    "publishers/google/models/gemini-2.0-flash"
 }
 
 # Default Vertex model
@@ -22,7 +24,7 @@ VERTEX_DEFAULT_MODEL = "publishers/google/models/gemini-2.5-pro"
 
 # Model validation messages
 MODEL_NOT_ALLOWED_MESSAGES = {
-    "vertex": "Only publishers/google/models/gemini-2.5-pro is supported in this release.",
+    "vertex": "Only gemini-2.5-pro and gemini-2.0-flash are supported by default. Configure via ALLOWED_VERTEX_MODELS env var.",
     "openai": "Only gpt-5 and gpt-5-chat-latest are supported via Responses API."
 }
 

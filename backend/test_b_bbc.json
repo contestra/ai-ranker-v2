@@ -1,0 +1,82 @@
+{
+  "id": "resp_68b41d1fbb10819caf7d760044b9f0ab0f71680378ededa5",
+  "object": "response",
+  "created_at": 1756634399,
+  "status": "completed",
+  "background": false,
+  "error": null,
+  "incomplete_details": null,
+  "instructions": "Search for current BBC news and provide a source URL. You must produce a final message with the answer.",
+  "max_output_tokens": 500,
+  "max_tool_calls": null,
+  "model": "gpt-5-2025-08-07",
+  "output": [
+    {
+      "id": "rs_68b41d2040bc819c8c889ba9a29518e40f71680378ededa5",
+      "type": "reasoning",
+      "summary": []
+    },
+    {
+      "id": "ws_68b41d22fa88819ca7f44b7f3d9ec44c0f71680378ededa5",
+      "type": "web_search_call",
+      "status": "completed",
+      "action": {
+        "type": "search",
+        "query": "BBC News homepage"
+      }
+    },
+    {
+      "id": "rs_68b41d258330819c8ed29fdef6ee76eb0f71680378ededa5",
+      "type": "reasoning",
+      "summary": []
+    }
+  ],
+  "parallel_tool_calls": true,
+  "previous_response_id": null,
+  "prompt_cache_key": null,
+  "reasoning": {
+    "effort": "medium",
+    "summary": null
+  },
+  "safety_identifier": null,
+  "service_tier": "default",
+  "store": true,
+  "temperature": 1.0,
+  "text": {
+    "format": {
+      "type": "text"
+    },
+    "verbosity": "medium"
+  },
+  "tool_choice": "auto",
+  "tools": [
+    {
+      "type": "web_search",
+      "filters": null,
+      "search_context_size": "medium",
+      "user_location": {
+        "type": "approximate",
+        "city": null,
+        "country": "US",
+        "region": null,
+        "timezone": null
+      }
+    }
+  ],
+  "top_logprobs": 0,
+  "top_p": 1.0,
+  "truncation": "disabled",
+  "usage": {
+    "input_tokens": 13144,
+    "input_tokens_details": {
+      "cached_tokens": 8448
+    },
+    "output_tokens": 384,
+    "output_tokens_details": {
+      "reasoning_tokens": 384
+    },
+    "total_tokens": 13528
+  },
+  "user": null,
+  "metadata": {}
+}

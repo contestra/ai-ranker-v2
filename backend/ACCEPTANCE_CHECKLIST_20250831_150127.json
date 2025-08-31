@@ -1,0 +1,133 @@
+{
+  "timestamp": "2025-08-31T15:00:37.017741",
+  "checklist": {
+    "cache_integrity": {
+      "test_configs": [
+        {
+          "cache_key": "gpt-5:web_search",
+          "model_sent": "gpt-5",
+          "model_used": "gpt-5",
+          "variant_requested": "web_search",
+          "variant_used": "web_search",
+          "model_adjusted": false,
+          "status": "success"
+        },
+        {
+          "cache_key": "gpt-5:web_search_preview",
+          "model_sent": "gpt-5",
+          "model_used": "gpt-5",
+          "variant_requested": "web_search_preview",
+          "variant_used": null,
+          "model_adjusted": false,
+          "status": "success"
+        },
+        {
+          "cache_key": "gpt-5-chat-latest:web_search",
+          "model_sent": "gpt-5-chat-latest",
+          "model_used": "gpt-5-chat-latest",
+          "variant_requested": "web_search",
+          "variant_used": "web_search",
+          "model_adjusted": true,
+          "status": "success"
+        },
+        {
+          "cache_key": "gpt-5-chat-latest:web_search_preview",
+          "model_sent": "gpt-5-chat-latest",
+          "model_used": "gpt-5-chat-latest",
+          "variant_requested": "web_search_preview",
+          "variant_used": "web_search_preview",
+          "model_adjusted": true,
+          "status": "success"
+        }
+      ],
+      "unique_cache_keys": 4,
+      "expected_unique": 4,
+      "passed": true
+    },
+    "required_semantics": {
+      "tests": [
+        {
+          "mode": "REQUIRED",
+          "result": "other_error",
+          "error": "GROUNDING_NOT_SUPPORTED: Model gpt-5-chat-latest does not support any web_search variant (REQUIRED m"
+        },
+        {
+          "mode": "AUTO",
+          "result": "success",
+          "grounding_attempted": false
+        }
+      ],
+      "required_fail_closed": false,
+      "auto_proceeds": true,
+      "passed": false
+    },
+    "two_pass_fallback": {
+      "note": "Check logs for [TOOL_FALLBACK] entries",
+      "passed": "manual_verification_required"
+    },
+    "telemetry": {
+      "control_probes_count": 2,
+      "fields_collected": [
+        "probe",
+        "model_used",
+        "model_adjusted",
+        "original_model",
+        "response_api",
+        "response_api_tool_type",
+        "tool_variant_retry",
+        "tool_call_count",
+        "tool_result_count",
+        "grounding_attempted",
+        "grounded_effective",
+        "why_not_grounded",
+        "web_search_queries"
+      ],
+      "passed": true
+    },
+    "normalization": {
+      "tests": [
+        {
+          "requested": "gpt-5-chat-latest",
+          "normalized": null,
+          "adjusted": true,
+          "original": "gpt-5-chat-latest",
+          "effective": "gpt-5"
+        }
+      ],
+      "no_reversal": true,
+      "passed": true
+    }
+  },
+  "control_probes": [
+    {
+      "probe": "White House",
+      "model_used": null,
+      "model_adjusted": true,
+      "original_model": "gpt-5-chat-latest",
+      "response_api": "responses_http",
+      "response_api_tool_type": "web_search_preview",
+      "tool_variant_retry": false,
+      "tool_call_count": 0,
+      "tool_result_count": 0,
+      "grounding_attempted": false,
+      "grounded_effective": false,
+      "why_not_grounded": "tool_not_invoked",
+      "web_search_queries": []
+    },
+    {
+      "probe": "BBC",
+      "model_used": null,
+      "model_adjusted": true,
+      "original_model": "gpt-5-chat-latest",
+      "response_api": "responses_http",
+      "response_api_tool_type": "web_search_preview",
+      "tool_variant_retry": false,
+      "tool_call_count": 0,
+      "tool_result_count": 0,
+      "grounding_attempted": false,
+      "grounded_effective": false,
+      "why_not_grounded": "tool_not_invoked",
+      "web_search_queries": []
+    }
+  ]
+}

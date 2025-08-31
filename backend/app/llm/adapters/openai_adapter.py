@@ -749,10 +749,17 @@ class OpenAIAdapter:
         # tools_attached: we attached OpenAI web_search on this call (not the same as "search actually happened")
         tools_attached = bool(params.get("tools"))
         
-        # GPT-5 specific parameters - use normalized model name
+        # Temperature Policy (per PRD):
+        # - GPT-5 ALWAYS uses temperature=1.0 (model requirement)
+        # - ANY grounded request uses temperature=1.0 (tools attached)
+        # - This OVERRIDES user-provided temperatures for consistency
+        # - Document in router PRD to avoid downstream surprises
         if model_name == "gpt-5" or tools_attached:
             # MANDATORY: temperature=1.0 for GPT-5 or when using tools
             params["temperature"] = 1.0
+            if request.temperature is not None and request.temperature != 1.0:
+                logger.debug(f"[TEMPERATURE_OVERRIDE] User temperature {request.temperature} -> 1.0 "
+                           f"(reason: {'GPT-5' if model_name == 'gpt-5' else 'tools attached'})")
         else:
             if request.temperature is not None:
                 params["temperature"] = request.temperature
@@ -932,14 +939,17 @@ class OpenAIAdapter:
                     # No longer need separate preview check since we handle both in fallback above
                     else:
                         # Not a web_search support issue
-                        retry_params = dict(call_params)
-                        retry_params["tools"] = [{"type": "web_search_preview"}]
-                        try:
-                            retry_response = await client_with_timeout.responses.create(**retry_params)
-                            metadata["response_api_tool_variant"] = "preview_retry"
-                            return retry_response
-                        except Exception as retry_e:
-                            logger.warning(f"Preview retry failed: {retry_e}")
+                        # Only retry with web_search_preview if the original request had tools
+                        # This avoids noisy retries for non-grounded requests
+                        if "tools" in call_params and call_params["tools"]:
+                            retry_params = dict(call_params)
+                            retry_params["tools"] = [{"type": "web_search_preview"}]
+                            try:
+                                retry_response = await client_with_timeout.responses.create(**retry_params)
+                                metadata["response_api_tool_variant"] = "preview_retry"
+                                return retry_response
+                            except Exception as retry_e:
+                                logger.warning(f"Preview retry failed: {retry_e}")
                     
                     raise RuntimeError(f"OPENAI_CALL_FAILED: {msg[:160]}") from e
 

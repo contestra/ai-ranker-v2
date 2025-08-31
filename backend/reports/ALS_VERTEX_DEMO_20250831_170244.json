@@ -1,0 +1,95 @@
+{
+  "timestamp": "20250831_170244",
+  "prompt_leak_check": true,
+  "results": {
+    "BASELINE": {
+      "grounded_effective": true,
+      "tool_calls": 6,
+      "citations": [
+        "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQHLh1EyH4ZmRRxcXk1eq5Bp4SpkVngegcYr1dgRuDvIz6FwRAKIIHLBPCGtSp9g05vfvPXIOsJcND2IFTtn-JSfDC6C3UVnd-MHUaZwG1DUMk0LCTLfXlArd_H-Onsgc05CDbgd4Wp-HvDmDnsEFfeevUOYuwpvwtdhjath0O4NVobhL-S9IDSJ5xW0JegeZLF6xPJRMg==",
+        "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQGqgZa4TrCs4zccRx_oc1memM09eoUvw99IqwuvUpQouImDrWGNBy-SM2srvIYHJQH9WHL2ioFguo2qe-VxjoNu0jGPSphsaaAkX3PmQX3fIWWJ-u0_7dlGrGWnzw7-wOMd-rjK",
+        "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQHA8ZqRwu8tEbigZ53soPoEj78OcYzClSbyfH13-bW9iYSWKKtOTKs6_PJ7jJwNAruBQzWn_hQma6FDSi0gd1iQ90tzFV5lPiJPzveHyR7WG61AUUv9bd3TD_pk-0hIVJR-lg==",
+        "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQF3dONt3sJgXE5BIEy2FidG3dUNyotaM-6qDAlQE8XlfcHs6u6Ku8E2Ub4btGhCp1sRItOjN6tCYhyauv0vPIUlnqx2m2oclSzq9Fr3nZjKtF4J2zJID3YUatkvy-9HIfO6OFI8uzpVipQd1Ft9pU-0uhuLL5ICVGs9nde8ueq5tkocARYQ8AlvD3pUMn8glic0YBZOT1s=",
+        "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQHwTklpLaLuWE3ffCduh0mDK2u8gu0kO-6nFNaLmRPpCjRwv9mfu7bXs_3UrnlPq37oZD9_k1lL6BZF7y4A9YcjFh4_1pk1mPHcAzjtI1Ellk5j44KBdNLcSxJADEQAAAubnhi8w4rTGEAhWgQ0HoHsDIVGJCUdR4zQ_u7CFwcVmD3BAsFzTcHe_WBQmoRYYu3g2QLeKK-JuLU=",
+        "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQEz0ejDXiOjPa-MK8yRTMRUZGyMT2aiv40nZXreMIpVc5Egy2gFFaJL9SiQruwdrRd5Vdgp1Wapjd8WlzboQm_VPPCluV-c1YHmnEKBci7UzuyrxX1mvTnDo72TDjnq2ATq4k0epCwljUzcoYHW"
+      ],
+      "citations_count": 6,
+      "tld_counts": {
+        ".com": 6
+      },
+      "local_domains": [],
+      "content_preview": "## Recent Scientific Findings Highlight Resveratrol's Potential, Yet Emphasize Need for Further Research\n\nRecent scientific studies and comprehensive reviews published in 2024 continue to explore the ..."
+    },
+    "CH": {
+      "grounded_effective": true,
+      "tool_calls": 7,
+      "citations": [
+        "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQF-_n-s9D0smMGCdtur0fPkzrKTXhrGTeC2BcBx9uWPpujqpMTPe8BK2fas8hnUXO1nDTmb7eOg96k0Vkqq7ocHlk7S7FqPwtQqynVPKDEkmmHosT61JNlkmHn_Q_FvskgnYHUAujfWBstNJ55e",
+        "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQF2OQDt2_9f-4kDHYhJh4x148aNrdwPNVe7pvdmf3Kyqv73RScjxqRh4vmjMugB7N7q3KLW-T9eujf9uZ1NVrCppTK-3tIT3_kfsUCGSBzjfbcGNXs5tD_1qEMzXm8MfcX6PYGd",
+        "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQGamFaoSG6IRCgL1gd8zLl3u9M7ExuNAvPn9tVgqUTIX_Co5FUbJ8Nb-RP-42GMLjvY7Sz4TsuGB1qUucteU8fdqisfC9NNLLIDTCoup5_fIdqnEucpqRjfgbB1yeW6WPU14iTLMJN0LdNd4bGev9uJ_RXbJQbxVcsPJUlBMGh2c-ISz-RsRE-3v-BxkCCyvP8llqPLac8hAT4=",
+        "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQHoth8TYWDnt8ZmMLv_GD2DBOqpOXnKoVv1WLMkH2bGYZrL5FWXLF7C5dEYKeM921gPlF11Zyzof8NYb0djTj2cvUcelq-mfYy-sup-X9NOBhHNA3DJFptzqmZD430DDQEBjid_cJY=",
+        "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQG0sa8FtsygcxD_Metrld5Z158NLB29-nDxjTU8q1ConKsYj9gDCDc1uKDKuZYaNIQ4paCV6YdXVCwpYNQYio55kVXMOoGxpTD7-R5WC-qW4FzbbsRP7iXgzgX8HRgoqfGXgDAF9HI4-6-qlycxvbdPxutunqE-oGNUrP2tB8FgeERZCABytZrqhWpAiWNqqQrH4cDmcA==",
+        "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQE-4_YkaAotnuT6aDxaS9dRfIefV5-KrJB-QvabKpx95lWJe5qElTWeC_c6FEl3Yyoe1yGhWTpzTEt__T143ili5DsIqNhDRTkEWMRuL7pROtqJaib7KEZOlRg2PGEypO1Mg7pd-t-OCGCB2sx_Q5_l6jRwRHClUxYmA5qby6O0eWr0iTxyeZ13DhMKbveC1KSUH8Z6ooM=",
+        "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQGo91M3dA6BTkJf6MGcqFj7lcPgYxR1qEJss72lyraA5O-nq37hTGDz6aYSV6FJzSM4YaGqeQpp7PmXC5cb5T4b5c5uDqLvNRLvYSftUvfyZuRnYFyljnR5rR4gc70MO5Mtjg==",
+        "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQH1hyeII3gEfVE1sSKU0TjweZ2MQJY5tiZVjlGE0czo7b3JdRiLHDk_schp_XOol307Gs_nmg94B6c8fC30_AYDeLntZANqp0aMAAs4oagMcHY9F4kqXZg6izQhKJbZR1mQiLNT8uSv10u-fq81"
+      ],
+      "citations_count": 8,
+      "tld_counts": {
+        ".com": 8
+      },
+      "local_domains": [],
+      "content_preview": "### Resveratrol Under Scrutiny: Recent Studies Explore Health Claims, But Questions Remain\n\nRecent scientific inquiry continues to investigate the potential health benefits of resveratrol supplements,..."
+    },
+    "DE": {
+      "grounded_effective": true,
+      "tool_calls": 4,
+      "citations": [
+        "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQHHXBME00cF0OUehuW5shnW3FE_H3egIOQJEycJ_H5oViE5WwBI96G6qYkJAqM8JpA5KRQUJ5kZD-xxex1UnHXp1poATvRchsf0XEc9PjU6Bf_pIELr1iegVQUNpCq7FfOag0IVWQwOwPQrDGSmLO3vUopLxAQLL0YbCPuIEz_3VTbnE8hPlR7gxxveDmI=",
+        "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQEeprt6KEZCAAid3OBhZ413EkjkcRWpqBK9hTd8EWDZfLYpt_THUGtoSESwcdvfzdFOPcuknpdpg6TpYtQKnKxW0QJSfbNjy7Sn2zh6t2fqMuWRdCIIv6GtnTbKY-Xt_16MJE357YgRbna2ZqgExTLq7wE0_vzk",
+        "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFbwJeWV4sfXHwN7rWw48Up7b-ZRjlCtcw2BFCdJ9SI2U9lgi6ojwqFgQExhnz13BnhNy2VY3AsZhQXF2s2OPYnnwDH_-WIGSpL0P7PgoRsbjd5B46Qhr5mjKJo9p5gM0mJnrd1Y9zcshE6Q5rO",
+        "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQGF2S9biaZLjLwO8AoJwgIATKrIZwO60PqaJnqNJ9R1eFS0dDBr0TxQkHXAJ9kozmyzmd40uvuBQ6prmjMRjbEDeGjg2Dtac1SKPI3JN5rVfoofXUFT7t-BEUu1R0GUKe7T",
+        "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQGABpUk4S95Kr1_fGbqTjYPNHWRMCniRAhwt6BP7tS3iwpgdOCBqBEDnoRp46krnC62F2LU68LoEZJGU57rIS3K2VCXn0F3c4rWoKhHYlvhJpg1U5ZiQBJdxc0qA5Fsxay4ZA==",
+        "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQEPttUMtBDR0wsVNmUTHGSmPfgnNgH2cKoVRMy2F8M7g9idDHmD7W04i_uBT1tWyUAij7pPwolNNC54vaMGo6byPbkumfdalpUg8kDSP2Jr1zYebM_xcVFai-Ls-9ij7o5dvFk_akK5AW4Y4Dh_",
+        "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQHs_I92T789_vTs0fGhtK5pzsMfwEezIGOCl4m1q1KC7LEO3i0QlPO6LXDIQmWpO_Y7XqMefx56L-nOCziXiL4IU54eqL4sq-bWe3jUT4Kf1kRhqQBo7ud4DiDPLCYGh5uJfaIaoZoNsJSf2Ijx2CnjCBF_-QDuBm7_sw88QbkG5upqsfyGilCZwOVvSNJelS0vlBXiog==",
+        "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQGY93qvTN7ZIu0Y6JcZ-9PpF7q6IbmslzyKPH_GHP4m7SwCeGNWSdNvz9RnfefHPT3upwMnbDfrI5ZpVRewmIlbmwyB2mE0YUke6S0mTYYLvjKErtwwNvPsvNDVQuRRMLFyC_4d",
+        "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQG1xHXVwGXmrj_ihg67b-FS7fvmq0hae9RaLwzSAvvXobiZgLS0fmpJA4KkGvVKcvkJlUoEjsDWqjxTDKg03SOhbnIzYf4ijPRdmqokI2VRnYbAm8xIi8hC0rQsDns4zkiyJIogf_1Y_WXyTNRW_B3wYLagB-geTaBfwQNu2441-ebuvLB9wmOMNzI5CngkIjVoJWsAnag=",
+        "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQEQjwYfBABkuu9_t_0LT5joqkGPjeGe5FNlBmtnJ4fUQ--VGJxEBUthc3MBYjeOvkX5K35nX_HWmzGHyraUqanlKx4fyh4W9xDJYcZBJIR8y-mH5StQHPz1hX0m06bKG8tTaqoRgQTysa5soDKIVsyFAhl5s9fOSTzDMc87szUTNziEh3QucAcolIsJ_7zb8xKIOfB8_FxfFgo="
+      ],
+      "citations_count": 10,
+      "tld_counts": {
+        ".com": 10
+      },
+      "local_domains": [],
+      "content_preview": "Recent scientific research continues to explore the potential health benefits of resveratrol, a natural compound found in red grapes, peanuts, and some berries. Studies have investigated its effects o..."
+    },
+    "US": {
+      "grounded_effective": true,
+      "tool_calls": 7,
+      "citations": [
+        "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQHIXR4FsDq7mOs1-CtZasX6QFBzmE2rM3wAIUAl33Se_noVrZ653eRbyduTNgWtTeRteLGmarEm3Ir0fhg8P6nxq_D6e_45l5iqBxXM9ciplir44SDpQbPaHdMUQuATVPN6IUmmTpIj4TJn1BM=",
+        "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQEybb-Y5dO5FPTGRMB2hVYLmBoweZRa-U2xHFpV5-CX_wxHdUNCFYwu2ZFfGa7EWmFyrd8Kpymnh6vzz8BKM-2_pOs5wlp06A5ySrkGNgcUIeTpr8JiujeBmR6A2C6Nc8oVTAPx3XMbJiWeNRala_RLWXoFSuIwjMnzklxJ89hJ31Q6ZB4XeDA7R3R7-wyfIWAAteieig==",
+        "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQEgz3MJ40PKiNVLG6-GGXqgvn1p-D0hQPnlcAfT82NwEY9gYkq55b66QyiDiuYuMqndidIqJFyDZTPgP_cYYA1F_KLT5EcUaqSq7SJ0cFCfZC8VddIGpqF6z2uzb_LxvRkQS6sRUrnZ1xrhm49BrgD026sgBsHtLZOHfpDEJXDCUOD82KMkD35alkPtyZYv0c6lL-Ffp6Pu3cdtdOLB8D0Nxx_w83CG",
+        "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFUeSebOQ6Ov_OISqZ5qpSp5TSElRR2BAOO593fsVho0DxasOBK_fqMpcbXXeD4DBWJ1itDtkOLaow4AD9E4UOrJK23eYtMdVTBfTry9NANs8oPO3ue2UvN5gGL5Zg6l9Q=",
+        "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFCbjZgcBFetsgn4AMTWwHL6UUvVJ1yeyfC6LemXE2eJ9KX0NSNqeO1okGpSjtMRznF4ZapzGKXXEtFyX1fUAk5WJbdt78bkaXXgZC3BNdtzagsNW3M_wKhp21ydd1B2Tsd9cy3G1Zdy6cosq8=",
+        "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQHpf1zYpN45iBgGrcYVlXKD7da-DwIp5aHO-PBhpYlIqnR7pyZ2tAU5_V97mgDTcCeOU2gG7Kb-VqE0quH5NspqfpOiitrEsc98YdEBREOGxR6VCi3i3Ys6LF8vYhz8GzYu4IBr",
+        "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQGCHkoZB7TKypdScklRU5wwgV_jwYPitzgtYXSYe6B_QmToeK9ZNTEtHu4M8s4rGWJxH-2a06tEj_KiuUeZ7Fr4noKjn_fnzjf5bgj_EJKQ-SX3t3j2WJtjONBPSj95b5_SbqA6W9npKPofMLUrtRPANqX2oac=",
+        "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFGfW_n4fYBvvAmTja63XNj8S51lyGyia2VoSRAFbrp21_dqsm-T0kixNcpYLKQRpmTLrhYS_xtFr_Ngkx1Vsy3dTa_9fF4lYacchFW5IJ6sMpHmxTeHewwDxxFhmh6NZxaT1_Ot1Egc_ANUhbjjZreBJC61WDaJwBfYVVcB7Lj9g==",
+        "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQE5GnOp8N7oKDN9sV9vLiCLf6wQ7sR0maELyzdsOpMfQLtfMyZI-YJSBDgKSpvQvylYRr0zBVgS3mJEsV2bz0upExDpQPQqCKJGZPMGUnJv5eL6ohIXYSR4Daa9EpNWJsYYk9Wf",
+        "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQEwJlMI5sedLVaBERfUb2UWcT4HtMm33qTIje1DuY1ll_NuqJofDKGO78eNwAfWHzPIsWKZx0H6_N_WHdbnv7LFJgtq0J7LhhdJrMEe_37jabcYVIX5ixH3Pk-4JyHzVwT_tg==",
+        "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFO0GSS3X7pfhbWRmei-q97j4wQLUHaCa7rckbr-VJI8ruk26AbcOEeo1Q9954aSUi7g5vpmA6X1LD2w7MaGaK3moQdPaw0TamFrcHoJPGHb8SLd_v4kXwjsIilnmtvNrgkr7sQK6jVQwO8KZ9K",
+        "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQHpkwmo_7b9GuidAyjcI0zTTA56u_tMi8tlJH_aM9tMg4EiM_XBy-P0II_6qk2LWXczBMJ2WeKdu4LFsN00b4js0mm32ArWswRzeo_rPgE34CnIY9u62v5HFhp8Eb-BcNIWcAiU56_zrTzLQE8="
+      ],
+      "citations_count": 12,
+      "tld_counts": {
+        ".com": 12
+      },
+      "local_domains": [
+        "vertexaisearch.cloud.google.com"
+      ],
+      "content_preview": "## Resveratrol Under the Microscope: Recent Studies Explore Health Benefits, But Questions Remain\n\nRecent scientific investigations into resveratrol, a natural compound found in red wine, grapes, and ..."
+    }
+  },
+  "summary": {
+    "als_effects_observed": false
+  }
+}

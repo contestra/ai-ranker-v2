@@ -264,6 +264,28 @@ class UnifiedLLMAdapter:
             else:
                 logger.debug(f"[GROUNDING_UNUSED] Request was grounded but no tools were invoked")
         
+        # Post-validation for REQUIRED mode - enforce grounding requirement
+        # This provides uniform enforcement across all providers, especially those that can't force tools
+        grounding_mode = None
+        try:
+            if hasattr(request, "meta") and isinstance(request.meta, dict):
+                grounding_mode = request.meta.get("grounding_mode")
+            else:
+                grounding_mode = getattr(request, "grounding_mode", None)
+        except Exception:
+            grounding_mode = None
+        
+        if grounding_mode == "REQUIRED" and request.grounded:
+            # Check if grounding was effective
+            if hasattr(response, 'grounded_effective') and not response.grounded_effective:
+                # REQUIRED mode but grounding was not effective - fail closed
+                logger.error(f"[GROUNDING_REQUIRED] REQUIRED mode but grounding not effective: "
+                           f"vendor={request.vendor}, model={request.model}")
+                raise ValueError(
+                    f"GROUNDING_REQUIRED_FAILED: Model {request.model} did not invoke grounding tools "
+                    f"despite REQUIRED mode. Provider cannot force tool usage."
+                )
+        
         # Step 3: Router-level ALS hardening - ensure ALS metadata is propagated BEFORE telemetry
         # This guarantees ALS visibility even if a provider adapter forgets to copy them
         try:

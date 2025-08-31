@@ -1,0 +1,47 @@
+{
+  "timestamp": "2025-08-31T12:03:49.386219",
+  "matrix": {
+    "attempted_effective": [],
+    "attempted_ineffective": [],
+    "not_attempted_effective": [],
+    "not_attempted_ineffective": [
+      "ungrounded"
+    ]
+  },
+  "tests": [
+    {
+      "name": "obvious_hit",
+      "query": "What is the official URL of the White House website?",
+      "mode": "AUTO",
+      "expected": "attempted_effective",
+      "success": true
+    },
+    {
+      "name": "nonsense_query",
+      "query": "What is the florblegab status of zxqwerty9999 on planet Klaxon?",
+      "mode": "REQUIRED",
+      "expected": "attempted_ineffective",
+      "success": false,
+      "error": "GROUNDING_NOT_SUPPORTED: Model gpt-5 does not support any web_search variant (REQUIRED mode)"
+    },
+    {
+      "name": "ungrounded",
+      "query": "What is 2+2?",
+      "mode": null,
+      "expected": "not_attempted_ineffective",
+      "result": {
+        "grounding_attempted": false,
+        "grounded_effective": false
+      },
+      "quadrant": "not_attempted_ineffective",
+      "success": true
+    },
+    {
+      "name": "regional_query",
+      "query": "What is the official URL of BBC News?",
+      "mode": "AUTO",
+      "expected": "attempted",
+      "success": true
+    }
+  ]
+}

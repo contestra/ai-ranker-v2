@@ -1,0 +1,25 @@
+{
+  "timestamp": "2025-08-31T10:53:33.464640",
+  "model": "gpt-5-chat-latest",
+  "org": "default",
+  "tools_tested": {
+    "web_search": {
+      "status": "NOT_SUPPORTED",
+      "error": "Error code: 400 - {'error': {'message': \"Invalid value: 'web_search'. Supported values are: 'function' and 'custom'.\", 'type': 'invalid_request_error', 'param': 'tools[0].type', 'code': 'invalid_value"
+    },
+    "web_search_preview": {
+      "status": "NOT_SUPPORTED",
+      "error": "Error code: 400 - {'error': {'message': \"Invalid value: 'web_search_preview'. Supported values are: 'function' and 'custom'.\", 'type': 'invalid_request_error', 'param': 'tools[0].type', 'code': 'inval"
+    },
+    "responses_web_search": {
+      "status": "NOT_SUPPORTED",
+      "status_code": 400,
+      "error": "{\n  \"error\": {\n    \"message\": \"Invalid 'max_output_tokens': integer below minimum value. Expected a value >= 16, but got 10 instead.\",\n    \"type\": \"invalid_request_error\",\n    \"param\": \"max_output_tokens\",\n    \"code\": \"integer_below_min_value\"\n  }\n}"
+    },
+    "responses_web_search_preview": {
+      "status": "NOT_SUPPORTED",
+      "status_code": 400,
+      "error": "{\n  \"error\": {\n    \"message\": \"Invalid 'max_output_tokens': integer below minimum value. Expected a value >= 16, but got 10 instead.\",\n    \"type\": \"invalid_request_error\",\n    \"param\": \"max_output_tokens\",\n    \"code\": \"integer_below_min_value\"\n  }\n}"
+    }
+  }
+}

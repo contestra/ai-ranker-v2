@@ -1,0 +1,76 @@
+{
+  "timestamp": "20250831_175345",
+  "results": {
+    "BASELINE": {
+      "grounded": true,
+      "citations": 13,
+      "tld_counts": {
+        "other": 1,
+        ".com": 4,
+        ".org": 3,
+        ".gov": 4,
+        ".edu": 1
+      },
+      "sample_domains": [
+        "news-medical.net",
+        "theguardian.com",
+        "bidmc.org",
+        "hcplive.com",
+        "nih.gov"
+      ]
+    },
+    "CH": {
+      "grounded": true,
+      "citations": 10,
+      "tld_counts": {
+        ".org": 1,
+        ".com": 5,
+        ".gov": 4
+      },
+      "sample_domains": [
+        "endocrine.org",
+        "mdpi.com",
+        "nih.gov",
+        "nih.gov",
+        "theguardian.com"
+      ]
+    },
+    "DE": {
+      "grounded": true,
+      "citations": 12,
+      "tld_counts": {
+        ".gov": 5,
+        ".com": 5,
+        "other": 1,
+        ".org": 1
+      },
+      "sample_domains": [
+        "nih.gov",
+        "nih.gov",
+        "bmj.com",
+        "researchgate.net",
+        "nih.gov"
+      ]
+    },
+    "US": {
+      "grounded": true,
+      "citations": 10,
+      "tld_counts": {
+        ".org": 4,
+        ".com": 4,
+        ".gov": 2
+      },
+      "sample_domains": [
+        "endocrine.org",
+        "endocrine.org",
+        "jwatch.org",
+        "mdpi.com",
+        "nih.gov"
+      ]
+    }
+  },
+  "analysis": {
+    "domain_extraction": "Using source_domain from titles",
+    "als_effects": false
+  }
+}
