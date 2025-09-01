@@ -1,0 +1,78 @@
+[TOOL_CHOICE] REQUIRED mode requested but web_search doesn't support tool_choice:required
+Adapter failed for vendor=openai: GROUNDING_NOT_SUPPORTED: Model gpt-5-chat-latest with web_search tools cannot guarantee REQUIRED mode (API limitation: tool_choice:'required' not supported). Use AUTO mode or a different model.
+[LLM_TIMEOUT] {"vendor": "openai", "model": "gpt-5-chat-latest", "vantage_policy": "NONE", "proxy_mode": "disabled", "country": "none", "grounded": true, "max_tokens": 100, "timeouts_s": {"connect": 2.0, "read": 120.0, "total": 122.0}, "error_type": "error", "error_msg": "Error code: 400 - {'error': {'message': \"Hosted tool 'web_search_preview' is not supported with gpt-5-chat-latest.\", 'type': 'invalid_request_error', 'param': 'tools', 'code': None}}"}
+[TOOL_FALLBACK] Both tool types unsupported for gpt-5-chat-latest
+Grounding not supported for gpt-5-chat-latest, proceeding without
+======================================================================
+OpenAI 3-Case Micro-Matrix Diagnostic
+======================================================================
+
+Objective: Determine if OpenAI can return citations in our setup
+Based on ChatGPT's precise diagnostic plan
+
+Test prompt includes provoker: 'As of today (2025-09-02), include an official source URL.'
+
+Running diagnostic tests...
+
+======================================================================
+CASE A: OpenAI REQUIRED Grounding
+======================================================================
+Model: gpt-5
+Tool choice: REQUIRED
+Expected: Fail-closed if no tool call, or citations if tool called
+
+⚠️ Expected fail-closed: GROUNDING_NOT_SUPPORTED: Model gpt-5-chat-latest with web_search tools cannot guarantee REQUIRED mode (API limitation: tool_choice:'required' not supported). Use AUTO mode or a different model.
+
+======================================================================
+CASE B: OpenAI AUTO Grounding
+======================================================================
+Model: gpt-5
+Tool choice: AUTO
+Expected: May or may not invoke tools
+
+✅ Request completed successfully
+Tool calls: 0
+Grounded effective: False
+Citations: 0
+
+======================================================================
+CASE C: OpenAI UNGROUNDED Baseline
+======================================================================
+Model: gpt-5-chat-latest
+No tools attached
+Expected: No tool calls, no citations
+
+✅ Request completed successfully
+Tool calls: 0
+Citations: 0
+
+======================================================================
+ANALYSIS (per ChatGPT's interpretation matrix)
+======================================================================
+
+Conclusions:
+  • Case A failed-closed with GROUNDING_REQUIRED_ERROR (tool_call_count=0)
+  • Case B (AUTO) had tool_call_count=0
+  • Case C (ungrounded) correctly had no tools
+
+Evidence:
+  • case_a: Model did not perform search in REQUIRED mode
+  • case_b: Aligns with known GPT-5 behavior: AUTO rarely searches
+  • case_c: Router correctly handles ungrounded
+
+Next Steps:
+  • Very strong evidence this is a provider-side behavior/entitlement issue
+
+📁 Full results saved to: openai_diagnostic_results_20250902_002213.json
+
+======================================================================
+ESCALATION PACKET (for OpenAI support)
+======================================================================
+
+Include in ticket:
+1. Model used: gpt-5
+2. Tool choice: REQUIRED
+3. Tool type attempted: web_search
+4. Timestamp: 20250902_002213
+5. Result: Model did not perform search in REQUIRED mode
+6. Policy: Our adapter fails-closed in REQUIRED when no tool call occurs

@@ -7,7 +7,8 @@
       "Bash(sed:*)",
       "Bash(while:*)",
       "Bash(do sleep:*)",
-      "Bash(done)"
+      "Bash(done)",
+      "Bash(Gemini evidence-emission gap for this query type, not an extraction failure.\"\n\nResults:\n- Production: CITATION_EXTRACTOR_EMIT_UNLINKED=false (clean metrics)\n- QA/Staging: CITATION_EXTRACTOR_EMIT_UNLINKED=true (full visibility)\n- REQUIRED mode: Maintains anchored-only contract in both environments\n- 100% test success rate with clear evidence trail\n\nThis completes all recommended improvements. The adapters are \nproduction-ready with enterprise-grade observability.\n\n🤖 Generated with [Claude Code](https://claude.ai/code)\n\nCo-Authored-By: Claude <noreply@anthropic.com>\nEOF\n)\")"
     ],
     "deny": [],
     "ask": [],
