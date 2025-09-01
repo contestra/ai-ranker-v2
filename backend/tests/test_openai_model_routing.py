@@ -92,6 +92,21 @@ async def test_openai_grounded_always_uses_gpt5():
             assert "chat-latest" not in str(actual_model_used), (
                 "Grounded OpenAI run must NEVER use gpt-5-chat-latest"
             )
+            
+            # TELEMETRY CHECKS: Verify metadata fields are populated correctly
+            metadata = resp.metadata or {}
+            assert metadata.get("model_adjusted_for_grounding") is True, (
+                "Telemetry missing: model_adjusted_for_grounding should be True"
+            )
+            assert metadata.get("original_model") == "gpt-5-chat-latest", (
+                f"Telemetry incorrect: original_model should be 'gpt-5-chat-latest', got {metadata.get('original_model')}"
+            )
+            assert metadata.get("grounded_effective") is True, (
+                "Telemetry missing: grounded_effective should be True for grounded requests"
+            )
+            assert metadata.get("response_api") == "responses_http", (
+                f"Telemetry incorrect: response_api should be 'responses_http' for grounded, got {metadata.get('response_api')}"
+            )
 
 
 @pytest.mark.asyncio
@@ -155,6 +170,19 @@ async def test_openai_ungrounded_always_uses_chat_latest():
             assert "chat-latest" in str(actual_model_used), (
                 "Ungrounded OpenAI run must use the chat variant"
             )
+            
+            # TELEMETRY CHECKS: Verify ungrounded metadata
+            metadata = resp.metadata or {}
+            assert metadata.get("grounded_effective") is False, (
+                "Telemetry incorrect: grounded_effective should be False for ungrounded requests"
+            )
+            assert metadata.get("model_adjusted_for_grounding") is None or metadata.get("model_adjusted_for_grounding") is False, (
+                "Telemetry incorrect: model_adjusted_for_grounding should not be True for ungrounded"
+            )
+            # Ungrounded should NOT use responses_http API (might use chat completions instead)
+            assert metadata.get("response_api") != "responses_http" or metadata.get("response_api") is None, (
+                f"Telemetry incorrect: ungrounded should not use responses_http, got {metadata.get('response_api')}"
+            )
 
 
 @pytest.mark.asyncio
@@ -207,6 +235,68 @@ async def test_openai_grounded_with_explicit_gpt5():
             # Should stay as gpt-5
             assert actual_model_used == "gpt-5", (
                 f"Model incorrectly changed from gpt-5 to {actual_model_used}"
+            )
+
+
+@pytest.mark.asyncio
+async def test_openai_ungrounded_with_wrong_model():
+    """
+    Edge case: User requests gpt-5 (grounding model) for ungrounded request.
+    Should ideally use gpt-5-chat-latest for ungrounded, but we allow it.
+    This test documents the current behavior.
+    """
+    with patch.dict(os.environ, {
+        "OPENAI_API_KEY": "test-key",
+        "MODEL_ADJUST_FOR_GROUNDING": "true",
+        "ALLOWED_OPENAI_MODELS": "gpt-5,gpt-5-chat-latest"
+    }):
+        with patch('app.llm.adapters.openai_adapter.OpenAI') as mock_openai:
+            mock_client = AsyncMock()
+            mock_openai.return_value = mock_client
+            
+            actual_model_used = None
+            
+            async def capture_and_respond(**kwargs):
+                nonlocal actual_model_used
+                actual_model_used = kwargs.get('model')
+                
+                mock_response = MagicMock()
+                mock_response.output = "Test response"
+                mock_response.model = actual_model_used
+                mock_response.metadata = {"grounded_effective": False}
+                mock_response.usage = {"prompt_tokens": 10, "completion_tokens": 20}
+                return mock_response
+            
+            mock_client.responses.create = AsyncMock(side_effect=capture_and_respond)
+            
+            openai_adapter = OpenAIAdapter()
+            vertex_adapter = VertexAdapter()
+            
+            adapter = UnifiedLLMAdapter(
+                openai_adapter=openai_adapter,
+                vertex_adapter=vertex_adapter
+            )
+            
+            req = LLMRequest(
+                vendor="openai",
+                model="gpt-5",  # Wrong model for ungrounded (should be gpt-5-chat-latest)
+                messages=[{"role": "user", "content": "Test"}],
+                grounded=False  # Ungrounded request
+            )
+            
+            resp = await adapter.complete(req)
+            
+            # Current behavior: We don't force ungrounded to use chat-latest
+            # (only force grounded to use gpt-5)
+            # This documents that we allow gpt-5 for ungrounded, though not optimal
+            assert actual_model_used == "gpt-5", (
+                "Model was unexpectedly changed"
+            )
+            
+            # Telemetry should still indicate ungrounded
+            metadata = resp.metadata or {}
+            assert metadata.get("grounded_effective") is False, (
+                "Should still be marked as ungrounded"
             )
 
 
