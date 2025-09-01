@@ -276,15 +276,44 @@ class UnifiedLLMAdapter:
             grounding_mode = None
         
         if grounding_mode == "REQUIRED" and request.grounded:
-            # Check if grounding was effective
+            # Check if grounding was effective and citations were extracted
+            grounding_failed = False
+            failure_reason = ""
+            
+            # Check grounding effectiveness
             if hasattr(response, 'grounded_effective') and not response.grounded_effective:
-                # REQUIRED mode but grounding was not effective - fail closed
-                logger.error(f"[GROUNDING_REQUIRED] REQUIRED mode but grounding not effective: "
-                           f"vendor={request.vendor}, model={request.model}")
-                raise ValueError(
-                    f"GROUNDING_REQUIRED_FAILED: Model {request.model} did not invoke grounding tools "
-                    f"despite REQUIRED mode. Provider cannot force tool usage."
-                )
+                grounding_failed = True
+                failure_reason = "Model did not invoke grounding tools"
+            
+            # Check for citations (even if grounded_effective is True)
+            elif hasattr(response, 'metadata') and response.metadata:
+                citations = response.metadata.get('citations', [])
+                if not citations:
+                    grounding_failed = True
+                    failure_reason = "Grounding tools invoked but no citations extracted"
+            else:
+                # No metadata at all
+                grounding_failed = True
+                failure_reason = "No grounding metadata available"
+            
+            if grounding_failed:
+                # REQUIRED mode but grounding was not effective or no citations - fail closed
+                logger.error(f"[GROUNDING_REQUIRED] REQUIRED mode failed: "
+                           f"vendor={request.vendor}, model={request.model}, reason={failure_reason}")
+                
+                # Import error class if needed
+                try:
+                    from app.llm.errors import GroundingRequiredFailedError
+                    raise GroundingRequiredFailedError(
+                        f"GROUNDING_REQUIRED_FAILED: {failure_reason}. "
+                        f"Model: {request.model}, Vendor: {request.vendor}"
+                    )
+                except ImportError:
+                    # Fallback to ValueError if error class not available
+                    raise ValueError(
+                        f"GROUNDING_REQUIRED_FAILED: {failure_reason}. "
+                        f"Model: {request.model}, Vendor: {request.vendor}"
+                    )
         
         # Step 3: Router-level ALS hardening - ensure ALS metadata is propagated BEFORE telemetry
         # This guarantees ALS visibility even if a provider adapter forgets to copy them

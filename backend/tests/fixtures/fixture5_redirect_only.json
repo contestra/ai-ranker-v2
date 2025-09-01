@@ -1,0 +1,55 @@
+{
+  "candidates": [
+    {
+      "content": {
+        "parts": [
+          {
+            "text": "Docker containers provide OS-level virtualization to package applications with their dependencies. Kubernetes orchestrates these containers at scale."
+          }
+        ],
+        "role": "model"
+      },
+      "groundingMetadata": {
+        "citedSources": [
+          {
+            "id": "0",
+            "uri": "https://bit.ly/docker-intro",
+            "title": "Docker Introduction"
+          },
+          {
+            "id": "1",
+            "uri": "https://tinyurl.com/k8s-basics",
+            "title": "Kubernetes Basics"
+          },
+          {
+            "id": "2",
+            "uri": "http://short.link/container-guide",
+            "title": "Container Orchestration Guide"
+          }
+        ],
+        "citations": [
+          {
+            "startIndex": 0,
+            "endIndex": 50,
+            "sourceIds": ["0"]
+          },
+          {
+            "startIndex": 51,
+            "endIndex": 100,
+            "sourceIds": ["1", "2"]
+          }
+        ]
+      },
+      "finishReason": "STOP"
+    }
+  ],
+  "usageMetadata": {
+    "promptTokenCount": 22,
+    "candidatesTokenCount": 30,
+    "totalTokenCount": 52
+  },
+  "_metadata": {
+    "comment": "All URLs are redirects/shorteners that need resolution",
+    "expected_behavior": "Citations should resolve to final domains after redirect following"
+  }
+}

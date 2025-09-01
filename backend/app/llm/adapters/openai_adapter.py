@@ -10,16 +10,20 @@ import logging
 import random
 import asyncio
 import httpx
+import re
 from typing import Any, Dict, List, Optional
 from contextlib import asynccontextmanager
+from urllib.parse import urlparse, urlunparse, parse_qs
 from openai import AsyncOpenAI
 
 from app.llm.types import LLMRequest, LLMResponse
 from app.llm.errors import GroundingNotSupportedError, GroundingRequiredFailedError
 from app.llm.models import OPENAI_ALLOWED_MODELS, OPENAI_DEFAULT_MODEL, validate_model, normalize_model
 from .grounding_detection_helpers import detect_openai_grounding, extract_openai_search_evidence
+from app.llm.citations.resolver import resolve_citation_url
+from app.llm.citations.domains import registrable_domain_from_url
 from app.llm.grounding_empty_results import analyze_openai_grounding, GroundingEmptyResultsError
-from app.core.config import get_settings
+from app.core.config import get_settings, settings
 from app.prometheus_metrics import (
     inc_rate_limit as _inc_rl_metric,
     set_openai_active_concurrency, 
@@ -37,6 +41,242 @@ from app.prometheus_metrics import (
 PROVIDER_MIN_OUTPUT_TOKENS = 16
 
 logger = logging.getLogger(__name__)
+
+# Debug flag for citation extraction
+DEBUG_GROUNDING = os.getenv("DEBUG_GROUNDING", "false").lower() == "true"
+
+
+def _get_registrable_domain(url: str) -> str:
+    """
+    Extract registrable domain from URL.
+    Simple implementation without public suffix list.
+    """
+    try:
+        parsed = urlparse(url)
+        domain = parsed.netloc.lower()
+        if not domain:
+            return ""
+        
+        # Remove port if present
+        domain = domain.split(':')[0]
+        
+        # Remove www. prefix
+        if domain.startswith('www.'):
+            domain = domain[4:]
+        
+        # For most domains, return as-is (keeps subdomains like ec.europa.eu)
+        # Only strip for known second-level TLDs
+        parts = domain.split('.')
+        if len(parts) >= 3:
+            # Check if it's a known second-level TLD pattern
+            if parts[-2] in ['co', 'ac', 'gov', 'edu', 'org', 'net', 'com'] and parts[-1] in ['uk', 'jp', 'au', 'nz', 'za']:
+                # e.g., example.co.uk -> return last 3 parts
+                return '.'.join(parts[-3:])
+        
+        # For everything else (including ec.europa.eu), return full domain
+        return domain
+    except:
+        return ""
+
+
+def _normalize_url(url: str) -> str:
+    """
+    Normalize URL for deduplication:
+    - Remove UTM params
+    - Remove anchors
+    - Lowercase host
+    """
+    try:
+        parsed = urlparse(url)
+        # Remove fragment
+        parsed = parsed._replace(fragment='')
+        
+        # Remove tracking params
+        if parsed.query:
+            params = parse_qs(parsed.query)
+            # Remove common tracking params
+            tracking_params = {'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 
+                              'utm_content', 'fbclid', 'gclid', 'ref', 'source'}
+            cleaned_params = {k: v for k, v in params.items() 
+                            if k.lower() not in tracking_params}
+            
+            # Rebuild query string
+            if cleaned_params:
+                query_parts = []
+                for k, v_list in cleaned_params.items():
+                    for v in v_list:
+                        query_parts.append(f"{k}={v}")
+                parsed = parsed._replace(query='&'.join(query_parts))
+            else:
+                parsed = parsed._replace(query='')
+        
+        # Lowercase netloc
+        parsed = parsed._replace(netloc=parsed.netloc.lower())
+        
+        return urlunparse(parsed)
+    except:
+        return url
+
+
+def _extract_openai_citations(response) -> List[Dict]:
+    """
+    Extract citations from OpenAI Responses API response.
+    Returns list of normalized citation dicts following the uniform schema.
+    """
+    citations = []
+    seen_urls = {}  # normalized_url -> citation dict (for deduplication)
+    
+    try:
+        # Helper to add citation with deduplication
+        def add_citation(url: str, title: str = "", snippet: str = "", 
+                        source_type: str = "web", rank: Optional[int] = None,
+                        raw_data: Optional[dict] = None):
+            if not url:
+                return
+            
+            normalized = _normalize_url(url)
+            
+            # If we've seen this URL, update rank if lower
+            if normalized in seen_urls:
+                existing = seen_urls[normalized]
+                if rank is not None and (existing.get('rank') is None or rank < existing['rank']):
+                    existing['rank'] = rank
+                return
+            
+            # New citation
+            citation = {
+                "provider": "openai",
+                "url": url,
+                "source_domain": "",  # Will be set after resolution
+                "title": title or "",
+                "snippet": snippet or "",
+                "source_type": source_type,
+                "rank": rank,
+                "raw": raw_data or {}
+            }
+            
+            # Resolve redirects and set source_domain
+            citation = resolve_citation_url(citation)
+            resolved_url = citation.get("resolved_url") or url
+            citation["source_domain"] = registrable_domain_from_url(resolved_url) or _get_registrable_domain(url)
+            
+            seen_urls[normalized] = citation
+            citations.append(citation)
+        
+        # 1. Check tool outputs for web_search/web_search_preview results
+        if hasattr(response, 'output') and response.output:
+            rank_counter = 1
+            for item in response.output:
+                if not isinstance(item, dict):
+                    continue
+                
+                item_type = item.get('type', '')
+                
+                # web_search or web_search_preview tool results
+                if item_type in ['web_search', 'web_search_preview']:
+                    # Extract search results
+                    content = item.get('content')
+                    if isinstance(content, str):
+                        # Parse content for URLs and titles
+                        # Simple pattern matching for typical search result format
+                        lines = content.split('\n')
+                        for line in lines:
+                            # Look for URL patterns
+                            url_match = re.search(r'https?://[^\s]+', line)
+                            if url_match:
+                                url = url_match.group(0).rstrip('.,;)')
+                                # Try to extract title (often before URL)
+                                title = line[:url_match.start()].strip(' -•·')
+                                add_citation(url, title=title, rank=rank_counter, 
+                                           raw_data={"tool_type": item_type})
+                                rank_counter += 1
+                    elif isinstance(content, dict):
+                        # Structured search results
+                        results = content.get('results', [])
+                        for idx, result in enumerate(results):
+                            if isinstance(result, dict):
+                                add_citation(
+                                    url=result.get('url', ''),
+                                    title=result.get('title', ''),
+                                    snippet=result.get('snippet', ''),
+                                    rank=idx + 1,
+                                    raw_data=result
+                                )
+                
+                # Check for url_citation annotations
+                elif item_type == 'url_citation':
+                    add_citation(
+                        url=item.get('url', ''),
+                        title=item.get('title', ''),
+                        snippet=item.get('snippet', ''),
+                        raw_data=item
+                    )
+                
+                # Handle tool_result frames (new Responses API format)
+                elif item_type == 'tool_result':
+                    tool_name = item.get('name', '')
+                    if tool_name in ['web_search', 'web_search_preview']:
+                        # Extract content from tool result
+                        content = item.get('content', '')
+                        
+                        if isinstance(content, str):
+                            # Parse text content for URLs
+                            lines = content.split('\n')
+                            for line in lines:
+                                url_match = re.search(r'https?://[^\s]+', line)
+                                if url_match:
+                                    url = url_match.group(0).rstrip('.,;)')
+                                    title = line[:url_match.start()].strip(' -•·')
+                                    add_citation(url, title=title, rank=rank_counter,
+                                               raw_data={"tool_type": "tool_result", "tool_name": tool_name})
+                                    rank_counter += 1
+                        elif isinstance(content, dict):
+                            # Structured tool result
+                            results = content.get('results', [])
+                            for idx, result in enumerate(results):
+                                if isinstance(result, dict):
+                                    add_citation(
+                                        url=result.get('url', ''),
+                                        title=result.get('title', ''),
+                                        snippet=result.get('snippet', ''),
+                                        rank=idx + 1,
+                                        raw_data=result
+                                    )
+        
+        # 2. Check message content for annotations (if present)
+        if hasattr(response, 'message') and response.message:
+            content = response.message.get('content', '')
+            
+            # Look for embedded annotations
+            if isinstance(content, dict) and 'annotations' in content:
+                for ann in content.get('annotations', []):
+                    if isinstance(ann, dict) and ann.get('type') == 'url_citation':
+                        add_citation(
+                            url=ann.get('url', ''),
+                            title=ann.get('title', ''),
+                            snippet=ann.get('snippet', ''),
+                            raw_data=ann
+                        )
+        
+        # Log if tools were called but no citations found
+        if DEBUG_GROUNDING and not citations:
+            # Check if tools were actually called
+            tool_count = 0
+            if hasattr(response, 'output'):
+                for item in response.output:
+                    if isinstance(item, dict) and item.get('type') in ['web_search', 'web_search_preview']:
+                        tool_count += 1
+            
+            if tool_count > 0:
+                logger.warning(f"[CITATIONS] OpenAI: {tool_count} tool calls but 0 citations extracted. "
+                             f"First output item: {response.output[0] if response.output else 'none'}")
+    
+    except Exception as e:
+        logger.error(f"[CITATIONS] Error extracting OpenAI citations: {e}")
+        import traceback
+        logger.error(f"[CITATIONS] Traceback: {traceback.format_exc()}")
+    
+    return citations
 
 
 class _OpenAIRateLimiter:
@@ -437,12 +677,10 @@ async def _probe_web_search_capability(client, model_name: str, timeout_s: int) 
     #     return True
 
 
-def _extract_openai_citations(response) -> list:
+def _extract_openai_citations_old(response) -> list:
     """
-    Collect URL citations from the final assistant message and any web_search tool items.
-    Returns a normalized list for dashboards.
-    Shape:
-      {provider:"openai", url, title, snippet, source_type, rank}
+    [DEPRECATED - kept for reference]
+    Old OpenAI citation extractor.
     """
     citations = []
     try:
@@ -587,7 +825,15 @@ class OpenAIAdapter:
             "proxies_enabled": False,
             "proxy_mode": "disabled",
             "response_api": "responses_http",
-            "provider_api_version": "openai:responses-v1"
+            "provider_api_version": "openai:responses-v1",
+            # Feature flags for monitoring
+            "feature_flags": {
+                "citation_extractor_v2": settings.citation_extractor_v2,
+                "citation_extractor_enable_legacy": settings.citation_extractor_enable_legacy,
+                "ungrounded_retry_policy": settings.ungrounded_retry_policy,
+                "text_harvest_auto_only": settings.text_harvest_auto_only,
+                "citations_extractor_enable": settings.citations_extractor_enable,
+            }
         }
         
         # Token configuration with environment defaults
@@ -984,6 +1230,15 @@ class OpenAIAdapter:
             logger.debug(f"[OPENAI_GROUNDING] Analysis: attempted={grounding_analysis['grounding_attempted']}, "
                         f"effective={grounded_effective}, tool_calls={tool_call_count}, "
                         f"results={grounding_analysis['tool_result_count']}, reason={grounding_analysis['why_not_grounded']}")
+            
+            # Extract citations if grounding was effective
+            if grounded_effective:
+                citations = _extract_openai_citations(response)
+                metadata["citations"] = citations
+                metadata["citation_count"] = len(citations)
+                
+                if DEBUG_GROUNDING:
+                    logger.debug(f"[CITATIONS] OpenAI: Extracted {len(citations)} citations")
             
             # REQUIRED mode enforcement with distinction
             if grounding_mode == "REQUIRED" and not grounded_effective:

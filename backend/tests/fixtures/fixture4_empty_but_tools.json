@@ -1,0 +1,31 @@
+{
+  "candidates": [
+    {
+      "content": {
+        "parts": [
+          {
+            "text": "Node.js is a JavaScript runtime built on Chrome's V8 JavaScript engine. It uses an event-driven, non-blocking I/O model that makes it lightweight and efficient."
+          }
+        ],
+        "role": "model"
+      },
+      "groundingMetadata": {
+        "citations": [],
+        "citedSources": [],
+        "groundingAttributions": []
+      },
+      "finishReason": "STOP"
+    }
+  ],
+  "usageMetadata": {
+    "promptTokenCount": 25,
+    "candidatesTokenCount": 35,
+    "totalTokenCount": 60
+  },
+  "modelVersion": "gemini-2.5-pro-002",
+  "_metadata": {
+    "comment": "This response called grounding tools but found no relevant sources",
+    "tool_calls": 4,
+    "grounded_effective": true
+  }
+}

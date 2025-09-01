@@ -1,0 +1,49 @@
+{
+  "candidates": [
+    {
+      "content": {
+        "parts": [
+          {
+            "text": "The Go programming language uses goroutines for concurrency. Goroutines are lightweight threads managed by the Go runtime, and they communicate using channels which provide a way to pass messages between goroutines safely."
+          }
+        ],
+        "role": "model"
+      },
+      "citationMetadata": {
+        "citations": [
+          {
+            "uri": "https://go.dev/doc/effective_go#goroutines",
+            "title": "Effective Go - Goroutines",
+            "publicationDate": "2023-01-15"
+          },
+          {
+            "uri": "https://gobyexample.com/channels",
+            "title": "Go by Example: Channels"
+          }
+        ]
+      },
+      "groundingMetadata": {
+        "supportingContent": [
+          {
+            "text": "Goroutines are functions or methods that run concurrently with other functions or methods. Goroutines are extremely cheap compared to threads.",
+            "uri": "https://go.dev/doc/effective_go#goroutines"
+          },
+          {
+            "text": "Channels are the pipes that connect concurrent goroutines. You can send values into channels from one goroutine and receive those values in another.",
+            "uri": "https://gobyexample.com/channels"
+          },
+          {
+            "text": "The Go runtime manages goroutine scheduling on OS threads automatically.",
+            "uri": "https://go.dev/doc/effective_go#concurrency"
+          }
+        ]
+      },
+      "finishReason": "STOP"
+    }
+  ],
+  "usageMetadata": {
+    "promptTokenCount": 30,
+    "candidatesTokenCount": 55,
+    "totalTokenCount": 85
+  }
+}

@@ -1,0 +1,53 @@
+{
+  "candidates": [
+    {
+      "content": {
+        "parts": [
+          {
+            "text": "Based on my search, Python's sorted() function uses Timsort algorithm, which has O(n log n) time complexity in average and worst cases."
+          }
+        ]
+      },
+      "groundingMetadata": {
+        "citations": [
+          {
+            "startIndex": 20,
+            "endIndex": 45,
+            "sourceIds": ["0", "2"]
+          },
+          {
+            "startIndex": 67,
+            "endIndex": 110,
+            "sourceIds": ["1"]
+          }
+        ],
+        "citedSources": [
+          {
+            "id": "0",
+            "uri": "https://docs.python.org/3/library/functions.html#sorted",
+            "title": "Python sorted() - Built-in Functions",
+            "snippet": "The sorted() function returns a new sorted list from the items in iterable."
+          },
+          {
+            "id": "1",
+            "uri": "https://en.wikipedia.org/wiki/Timsort",
+            "title": "Timsort - Wikipedia",
+            "snippet": "Timsort is a hybrid stable sorting algorithm with worst-case time complexity of O(n log n)."
+          },
+          {
+            "id": "2",
+            "uri": "https://stackoverflow.com/questions/1517496",
+            "title": "What is the time complexity of Python's sorted()?",
+            "snippet": "Python's sorted() uses Timsort which has O(n log n) complexity."
+          }
+        ]
+      },
+      "finishReason": "STOP"
+    }
+  ],
+  "usageMetadata": {
+    "promptTokenCount": 25,
+    "candidatesTokenCount": 42,
+    "totalTokenCount": 67
+  }
+}

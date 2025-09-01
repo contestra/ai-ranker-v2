@@ -1,0 +1,64 @@
+{
+  "candidates": [
+    {
+      "content": {
+        "parts": [
+          {
+            "text": "React hooks like useState and useEffect were introduced in React 16.8 as a way to use state and lifecycle methods in functional components."
+          }
+        ],
+        "role": "model"
+      },
+      "groundingMetadata": {
+        "groundingAttributions": [
+          {
+            "sourceId": {
+              "groundingPassage": {
+                "passageId": "0",
+                "partIndex": 0
+              }
+            },
+            "content": {
+              "parts": [
+                {
+                  "text": "React Hooks are functions that let you use state and other React features in functional components."
+                }
+              ]
+            },
+            "web": {
+              "uri": "https://react.dev/reference/react",
+              "title": "React Reference Overview - React",
+              "snippet": "React Hooks are functions that let you use state and other React features in functional components."
+            }
+          },
+          {
+            "sourceId": {
+              "groundingPassage": {
+                "passageId": "1",
+                "partIndex": 0
+              }
+            },
+            "content": {
+              "parts": [
+                {
+                  "text": "useState is a React Hook that lets you add a state variable to your component."
+                }
+              ]
+            },
+            "web": {
+              "uri": "https://react.dev/reference/react/useState",
+              "title": "useState - React",
+              "snippet": "useState is a React Hook that lets you add a state variable to your component."
+            }
+          }
+        ]
+      },
+      "finishReason": "STOP"
+    }
+  ],
+  "usageMetadata": {
+    "promptTokenCount": 28,
+    "candidatesTokenCount": 38,
+    "totalTokenCount": 66
+  }
+}

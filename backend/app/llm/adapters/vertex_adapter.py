@@ -12,13 +12,16 @@ import time
 import logging
 import asyncio
 import hashlib
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import vertexai
 from vertexai import generative_models as gm
 from vertexai.generative_models import grounding
 from vertexai.generative_models import Tool
 from starlette.concurrency import run_in_threadpool
+
+# Import settings for feature flags
+from app.core.config import settings
 
 # Import google-genai for new API support
 try:
@@ -31,183 +34,726 @@ except ImportError:
 from app.llm.types import LLMRequest, LLMResponse
 from app.llm.models import VERTEX_ALLOWED_MODELS, VERTEX_DEFAULT_MODEL, validate_model
 from .grounding_detection_helpers import detect_vertex_grounding
+from urllib.parse import urlparse, urlunparse, parse_qs
+from app.llm.citations.resolver import resolve_citation_url, resolve_citations_with_budget
+from app.llm.citations.domains import registrable_domain_from_url
 
 logger = logging.getLogger(__name__)
 
-def _extract_vertex_citations2(resp) -> list:
+# Debug flag for citation extraction
+DEBUG_GROUNDING = os.getenv("DEBUG_GROUNDING", "false").lower() == "true"
+
+def _get_registrable_domain(url: str) -> str:
     """
-    Enhanced citation extractor that handles multiple field names including
-    grounding_chunks and grounding_supports from the audit.
+    Extract registrable domain from URL.
+    Simple implementation without public suffix list.
+    """
+    try:
+        parsed = urlparse(url)
+        domain = parsed.netloc.lower()
+        if not domain:
+            return ""
+        
+        # Remove port if present
+        domain = domain.split(':')[0]
+        
+        # Remove www. prefix
+        if domain.startswith('www.'):
+            domain = domain[4:]
+        
+        # For Vertex redirects, keep the full domain
+        if 'vertexaisearch.cloud.google.com' in domain:
+            return domain
+        
+        # For most domains, return as-is (keeps subdomains)
+        # Only strip for known second-level TLDs
+        parts = domain.split('.')
+        if len(parts) >= 3:
+            # Check if it's a known second-level TLD pattern
+            if parts[-2] in ['co', 'ac', 'gov', 'edu', 'org', 'net', 'com'] and parts[-1] in ['uk', 'jp', 'au', 'nz', 'za']:
+                # e.g., example.co.uk -> return last 3 parts
+                return '.'.join(parts[-3:])
+        
+        # For everything else, return full domain
+        return domain
+    except:
+        return ""
+
+
+def _normalize_url(url: str) -> str:
+    """
+    Normalize URL for deduplication:
+    - Remove UTM params
+    - Remove anchors
+    - Lowercase host
+    """
+    try:
+        parsed = urlparse(url)
+        # Remove fragment
+        parsed = parsed._replace(fragment='')
+        
+        # Remove tracking params
+        if parsed.query:
+            params = parse_qs(parsed.query)
+            # Remove common tracking params
+            tracking_params = {'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 
+                              'utm_content', 'fbclid', 'gclid', 'ref', 'source'}
+            cleaned_params = {k: v for k, v in params.items() 
+                            if k.lower() not in tracking_params}
+            
+            # Rebuild query string
+            if cleaned_params:
+                query_parts = []
+                for k, v_list in cleaned_params.items():
+                    for v in v_list:
+                        query_parts.append(f"{k}={v}")
+                parsed = parsed._replace(query='&'.join(query_parts))
+            else:
+                parsed = parsed._replace(query='')
+        
+        # Lowercase netloc
+        parsed = parsed._replace(netloc=parsed.netloc.lower())
+        
+        return urlunparse(parsed)
+    except:
+        return url
+
+
+def _compute_ab_bucket(tenant_id: Optional[str] = None, account_id: Optional[str] = None, 
+                      template_id: Optional[str] = None) -> float:
+    """
+    Compute stable A/B bucket for consistent rollout.
+    Uses stable tenant/account identifiers for sticky bucketing.
+    
+    Args:
+        tenant_id: Stable tenant identifier (preferred)
+        account_id: Stable account identifier (fallback)
+        template_id: Optional template ID for per-template bucketing
+    
+    Returns: float in [0, 1) for comparison with citation_extractor_v2 threshold
+    """
+    # Build stable key from tenant/account (never use request_id which changes)
+    stable_key_parts = []
+    if tenant_id:
+        stable_key_parts.append(f"tenant:{tenant_id}")
+    elif account_id:
+        stable_key_parts.append(f"account:{account_id}")
+    else:
+        # Fallback for anonymous/testing - will get consistent assignment
+        stable_key_parts.append("anonymous")
+    
+    # Optionally include template for per-template canaries
+    if template_id:
+        stable_key_parts.append(f"template:{template_id}")
+    
+    hash_key = "|".join(stable_key_parts)
+    
+    # Generate stable hash (MD5 is fine for distribution, not security)
+    hash_obj = hashlib.md5(hash_key.encode())
+    hash_bytes = hash_obj.digest()
+    
+    # Convert first 4 bytes to float in [0, 1)
+    bucket_int = int.from_bytes(hash_bytes[:4], byteorder='big')
+    max_int = 2**32 - 1
+    
+    return bucket_int / max_int
+
+
+def _select_and_extract_citations(resp, tenant_id: str = None, account_id: str = None,
+                                 template_id: str = None) -> Tuple[List[Dict], Dict[str, Any]]:
+    """
+    A/B selection wrapper for citation extraction with proper flag precedence.
+    
+    Flag precedence:
+    1. CITATIONS_EXTRACTOR_ENABLE=false → disable all extraction
+    2. Otherwise, use percentage rollout via CITATION_EXTRACTOR_V2
+    3. CITATION_EXTRACTOR_ENABLE_LEGACY controls fallback availability
+    
+    Returns: (citations, telemetry_dict)
+    """
+    telemetry = {}
+    
+    # Flag precedence 1: Master kill switch
+    if not settings.citations_extractor_enable:
+        telemetry["extractor_variant"] = "disabled"
+        telemetry["ab_bucket"] = 0.0
+        telemetry["anchored_citations_count"] = 0
+        telemetry["unlinked_sources_count"] = 0
+        return [], telemetry
+    
+    # Compute A/B bucket using stable identifiers
+    bucket = _compute_ab_bucket(tenant_id=tenant_id, account_id=account_id, 
+                               template_id=template_id)
+    telemetry["ab_bucket"] = round(bucket, 4)
+    
+    # Clamp citation_extractor_v2 to [0, 1] for safety
+    v2_threshold = max(0.0, min(1.0, settings.citation_extractor_v2))
+    
+    # Boundary rule: bucket strictly less than threshold goes to V2
+    # e.g., 0.05 threshold means buckets [0, 0.05) get V2 (exactly 5%)
+    use_v2 = bucket < v2_threshold
+    
+    # Track current flag values
+    telemetry["flag_snapshot"] = {
+        "citation_extractor_v2": settings.citation_extractor_v2,
+        "citations_extractor_enable": settings.citations_extractor_enable,
+        "citation_extractor_enable_legacy": settings.citation_extractor_enable_legacy,
+    }
+    
+    # Try selected variant with fallback
+    citations = []
+    variant_used = None
+    
+    try:
+        if use_v2:
+            # Use V2 extractor
+            variant_used = "v2"
+            telemetry["extractor_variant"] = "v2"
+            citations = _extract_vertex_citations(resp)
+        else:
+            # Use legacy extractor
+            if settings.citation_extractor_enable_legacy:
+                variant_used = "legacy"
+                telemetry["extractor_variant"] = "legacy"
+                citations = _extract_vertex_citations_legacy(resp)
+            else:
+                # Legacy disabled, use V2 anyway
+                variant_used = "v2"
+                telemetry["extractor_variant"] = "v2_forced"
+                citations = _extract_vertex_citations(resp)
+                
+    except Exception as e:
+        # On error, try fallback
+        logger.warning(f"Citation extractor {variant_used} failed: {e}")
+        telemetry["variant_error"] = str(e)[:200]  # Truncate for safety, no stack/PII
+        
+        if variant_used == "v2" and settings.citation_extractor_enable_legacy:
+            try:
+                logger.info("Falling back to legacy extractor")
+                citations = _extract_vertex_citations_legacy(resp)
+                telemetry["variant_fallback"] = True
+                telemetry["extractor_variant"] = "legacy_fallback"
+            except Exception as e2:
+                logger.error(f"Legacy fallback also failed: {e2}")
+                telemetry["fallback_error"] = str(e2)[:200]
+    
+    # Add citation metrics by variant
+    anchored_count = 0
+    unlinked_count = 0
+    shape_set = set()
+    
+    for cit in citations:
+        # Count anchored vs unlinked
+        if cit.get("source_type") in ["direct_uri", "v1_join", "groundingChunks"]:
+            anchored_count += 1
+        elif cit.get("source_type") in ["unlinked", "legacy", "text_harvest"]:
+            unlinked_count += 1
+        
+        # Track shape
+        shape = cit.get("source_type", "unknown")
+        shape_set.add(shape)
+    
+    telemetry["anchored_citations_count"] = anchored_count
+    telemetry["unlinked_sources_count"] = unlinked_count
+    telemetry["citations_shape_set"] = list(shape_set)
+    
+    return citations, telemetry
+
+
+def _extract_vertex_citations_legacy(resp) -> List[Dict]:
+    """
+    Legacy citation extractor - simplified version before the comprehensive fixes.
+    Kept for A/B testing and safe rollback.
     """
     citations = []
-    def add(item: dict):
-        if not item: return
+    seen_urls = {}
+    
+    # Simple extraction from candidates
+    candidates = getattr(resp, 'candidates', [])
+    if not candidates and hasattr(resp, 'model_dump'):
+        dict_resp = resp.model_dump()
+        candidates = dict_resp.get('candidates', [])
+    
+    for candidate in candidates:
+        # Check groundingMetadata at candidate level
+        gm = getattr(candidate, 'groundingMetadata', None) or getattr(candidate, 'grounding_metadata', None)
+        if not gm and isinstance(candidate, dict):
+            gm = candidate.get('groundingMetadata') or candidate.get('grounding_metadata')
         
-        # Look for non-redirect URLs first (web.uri, sourceUrl, pageUrl)
-        true_url = None
+        if gm:
+            # Extract from various fields (simplified)
+            if isinstance(gm, dict):
+                # Check citations array
+                for cit in gm.get('citations', []):
+                    url = cit.get('uri') or cit.get('url')
+                    if url and url not in seen_urls:
+                        seen_urls[url] = {
+                            "provider": "vertex",
+                            "url": url,
+                            "title": cit.get('title'),
+                            "snippet": cit.get('snippet'),
+                            "source_domain": registrable_domain_from_url(url),
+                            "source_type": "legacy",
+                            "rank": len(citations) + 1
+                        }
+                        citations.append(seen_urls[url])
+    
+    return citations
+
+
+def _extract_vertex_citations(resp) -> List[Dict]:
+    """
+    Extract citations from Vertex/Gemini response following uniform schema.
+    Handles multiple SDK variants and field names, including the v1 JOIN pattern.
+    
+    V1 pattern: citations (spans with sourceIds) → citedSources (actual URLs)
+    Legacy patterns: groundingAttributions, groundingChunks, etc. with direct URLs
+    """
+    citations = []
+    seen_urls = {}  # normalized_url -> citation dict (for deduplication)
+    
+    def add_citation(raw_item: dict):
+        if not raw_item:
+            return
+        
+        # Look for end-site URLs in various fields (prioritize non-redirect URLs)
+        end_url = None
         redirect_url = None
+        title = ""
+        snippet = ""
+        source_domain = None
         
-        # Check for direct URLs in various fields
-        for url_field in ["sourceUrl", "pageUrl", "source_uri"]:
-            if url_field in item and item[url_field]:
-                url = item[url_field]
-                # Check if it's not a Vertex redirect
-                if "vertexaisearch.cloud.google.com" not in url:
-                    true_url = url
+        # 1. Check for direct URLs in various fields
+        for url_field in ["sourceUrl", "pageUrl", "source_uri", "url", "uri"]:
+            if url_field in raw_item and raw_item[url_field]:
+                url = raw_item[url_field]
+                # Check if it's a Vertex redirect
+                if "vertexaisearch.cloud.google.com/grounding-api-redirect" in url:
+                    redirect_url = url
+                else:
+                    end_url = url
                     break
         
-        # Check nested web/source/reference for non-redirect URLs
-        if not true_url:
-            for nested_key in ["web", "source", "reference"]:
-                if nested_key in item and isinstance(item[nested_key], dict):
-                    nested = item[nested_key]
+        # 2. Check nested structures for end-site URLs
+        if not end_url:
+            for nested_key in ["web", "source", "reference", "support"]:
+                if nested_key in raw_item and isinstance(raw_item[nested_key], dict):
+                    nested = raw_item[nested_key]
                     for url_field in ["uri", "url", "sourceUrl", "pageUrl"]:
                         if url_field in nested and nested[url_field]:
                             url = nested[url_field]
                             if "vertexaisearch.cloud.google.com" not in url:
-                                true_url = url
+                                end_url = url
                                 break
-                    if true_url:
+                    
+                    # Also check for domain/host fields
+                    if not source_domain:
+                        source_domain = nested.get("domain") or nested.get("host")
+                    
+                    if end_url:
                         break
         
-        # Fall back to redirect URL if no true URL found
-        if not true_url:
-            if "url" in item and "uri" not in item:
-                item["uri"] = item["url"]
-            redirect_url = item.get("uri") or item.get("url")
+        # Use whichever URL we found
+        final_url = end_url or redirect_url
+        if not final_url:
+            return
         
-        final_url = true_url or redirect_url
-        if final_url:
-            # Normalize to our standard format
-            citation = {
-                "provider": "vertex",
-                "url": final_url,  # Prefer true URL over redirect
-                "title": item.get("title"),
-                "snippet": item.get("snippet") or item.get("text"),
-                "source_type": "google_search",
-                "rank": len(citations) + 1
-            }
+        # Normalize URL for deduplication
+        normalized = _normalize_url(final_url)
+        
+        # Extract title and snippet
+        title = raw_item.get("title", "")
+        snippet = raw_item.get("snippet") or raw_item.get("text") or raw_item.get("summary", "")
+        
+        # Determine source_domain
+        if end_url:
+            # Extract from actual end URL
+            source_domain = _get_registrable_domain(end_url)
+        elif source_domain:
+            # Already extracted from nested fields
+            pass
+        elif title and '.' in title and not ' ' in title[:20]:
+            # Title might be a domain (e.g., "consensus.app", "nih.gov")
+            domain_match = re.match(r'^([a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)+)', title)
+            if domain_match:
+                source_domain = domain_match.group(1).lower()
+        
+        # If still no source_domain and we only have redirect, extract from redirect
+        if not source_domain and redirect_url:
+            source_domain = _get_registrable_domain(redirect_url)
+        
+        # Check for duplicate
+        if normalized in seen_urls:
+            # Update rank if lower
+            existing = seen_urls[normalized]
+            new_rank = len(citations) + 1
+            if existing.get('rank') is None or new_rank < existing['rank']:
+                existing['rank'] = new_rank
+            return
+        
+        # Create citation with raw data preserved
+        citation = {
+            "provider": "vertex",
+            "url": final_url,
+            "source_domain": "",  # Will be set after resolution
+            "title": title,
+            "snippet": snippet,
+            "source_type": "web",
+            "rank": len(citations) + 1,
+            "raw": raw_item
+        }
+        
+        # Don't resolve here - will batch resolve at the end
+        # Just set source_domain from what we have
+        citation["source_domain"] = source_domain or _get_registrable_domain(final_url)
+        
+        seen_urls[normalized] = citation
+        citations.append(citation)
+    
+    try:
+        # STEP 1: Materialize both views up front
+        typed_candidates = list(getattr(resp, "candidates", None) or [])
+        
+        # Get dict view from model_dump if available
+        dict_resp = None
+        if isinstance(resp, dict):
+            dict_resp = resp
+        elif hasattr(resp, 'model_dump'):
+            try:
+                dict_resp = resp.model_dump()
+            except Exception:
+                pass
+        
+        dict_candidates = dict_resp.get("candidates", []) if dict_resp else []
+        
+        # Process max of both views
+        n = max(len(typed_candidates), len(dict_candidates))
+        
+        # STEP 2: Iterate by index to handle both views
+        for idx in range(n):
+            # Get typed candidate at this index (if exists)
+            typed_cand = typed_candidates[idx] if idx < len(typed_candidates) else None
             
-            # If we used a redirect URL, note it
-            if not true_url and redirect_url:
-                citation["is_redirect"] = True
-            
-            # Extract actual domain from various sources
-            source_domain = None
-            
-            # 1. Try to extract from true URL if available
-            if true_url:
-                from urllib.parse import urlparse
+            # Get dict candidate at this index (if exists)
+            cand_dict = {}
+            if idx < len(dict_candidates):
+                cand_dict = dict_candidates[idx]
+            elif typed_cand and hasattr(typed_cand, 'model_dump'):
+                # Fallback: try to get dict from typed candidate
                 try:
-                    parsed = urlparse(true_url)
-                    if parsed.netloc:
-                        source_domain = parsed.netloc.lower()
-                        # Remove www. prefix
-                        if source_domain.startswith("www."):
-                            source_domain = source_domain[4:]
+                    cand_dict = typed_cand.model_dump()
                 except:
                     pass
             
-            # 2. Try to extract from title if it looks like a domain
-            if not source_domain:
-                title = item.get("title")
-                if title and '.' in title:
-                    # Title appears to be a domain (e.g., "consensus.app", "nih.gov", "webmd.com")
-                    domain_match = re.match(r'^([a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)+)', title)
-                    if domain_match:
-                        source_domain = domain_match.group(1)
-            
-            # 3. Try to extract from nested metadata
-            if not source_domain:
-                # Check for domain in nested structures
-                for nested_key in ["web", "source", "reference"]:
-                    if nested_key in item and isinstance(item[nested_key], dict):
-                        nested = item[nested_key]
-                        # Look for domain field
-                        if "domain" in nested:
-                            source_domain = nested["domain"]
-                            break
-                        # Look for host field
-                        if "host" in nested:
-                            source_domain = nested["host"]
-                            break
-            
-            # Add source_domain if found
-            if source_domain:
-                citation["source_domain"] = source_domain
-            
-            citations.append(citation)
-    
-    try:
-        cands = getattr(resp, "candidates", None) or []
-        for cand in cands:
-            gm = getattr(cand, "grounding_metadata", None) or getattr(cand, "groundingMetadata", None) or {}
+            # STEP 3: Always consult dict fields first (more stable)
             gm_dict = {}
-            try:
-                gm_dict = dict(gm)
-            except Exception:
-                for key in dir(gm):
-                    if not key.startswith("_"):
-                        try: gm_dict[key] = getattr(gm, key)
-                        except Exception: pass
+            cm_dict = {}
             
-            # Check all possible field names
-            pools = [
-                gm_dict.get("citations"),
-                gm_dict.get("cited_sources") or gm_dict.get("citedSources"),
-                gm_dict.get("grounding_attributions") or gm_dict.get("groundingAttributions"),
-                gm_dict.get("supporting_content") or gm_dict.get("supportingContent"),
-                gm_dict.get("sources"),
-                gm_dict.get("grounding_chunks") or gm_dict.get("groundingChunks"),
-                gm_dict.get("grounding_supports") or gm_dict.get("groundingSupports"),
+            if cand_dict:
+                # Extract from dict (both camel and snake case)
+                gm_dict = cand_dict.get('groundingMetadata') or cand_dict.get('grounding_metadata') or {}
+                cm_dict = cand_dict.get('citationMetadata') or cand_dict.get('citation_metadata') or {}
+            
+            # STEP 4: Also check typed attributes for enrichment
+            gm_attr = None
+            cm_attr = None
+            
+            if typed_cand:
+                gm_attr = getattr(typed_cand, "grounding_metadata", None) or getattr(typed_cand, "groundingMetadata", None)
+                cm_attr = getattr(typed_cand, "citation_metadata", None) or getattr(typed_cand, "citationMetadata", None)
+            
+            # Skip ONLY if we have no data from any source
+            if not gm_dict and not cm_dict and not gm_attr and not cm_attr:
+                continue
+            
+            # STEP 5: Merge typed attributes into dict if dict is empty
+            if not gm_dict and gm_attr:
+                try:
+                    gm_dict = dict(gm_attr)
+                except:
+                    # Introspect if dict conversion fails
+                    for key in dir(gm_attr):
+                        if not key.startswith("_"):
+                            try:
+                                val = getattr(gm_attr, key)
+                                if isinstance(val, list) and val:
+                                    converted = []
+                                    for item in val:
+                                        if hasattr(item, '__dict__'):
+                                            converted.append(vars(item))
+                                        else:
+                                            converted.append(item)
+                                    gm_dict[key] = converted
+                                else:
+                                    gm_dict[key] = val
+                            except:
+                                pass
+            
+            if not cm_dict and cm_attr:
+                try:
+                    cm_dict = dict(cm_attr)
+                except:
+                    # Introspect if dict conversion fails
+                    for key in dir(cm_attr):
+                        if not key.startswith("_"):
+                            try:
+                                val = getattr(cm_attr, key)
+                                if isinstance(val, list) and val:
+                                    converted = []
+                                    for item in val:
+                                        if hasattr(item, '__dict__'):
+                                            converted.append(vars(item))
+                                        else:
+                                            converted.append(item)
+                                    cm_dict[key] = converted
+                                else:
+                                    cm_dict[key] = val
+                            except:
+                                pass
+            
+            # Merge citation metadata into grounding metadata dict
+            if cm_dict:
+                for key, value in cm_dict.items():
+                    if key not in gm_dict:
+                        gm_dict[key] = value
+            
+            # Now gm_dict has everything - continue with extraction
+            
+            # STEP 1: Build source pool and ID map for v1 JOIN pattern
+            source_id_map = {}  # sourceId -> source dict
+            source_pool = []    # All sources for fallback emission
+            
+            # Collect citedSources (v1 pattern) - these have the actual URLs
+            cited_sources = gm_dict.get("citedSources") or gm_dict.get("cited_sources") or []
+            for idx, source in enumerate(cited_sources):
+                source_dict = source if isinstance(source, dict) else {}
+                if not isinstance(source, dict):
+                    # Convert object to dict
+                    for attr in ["id", "uri", "url", "title", "snippet", "web"]:
+                        if hasattr(source, attr):
+                            source_dict[attr] = getattr(source, attr)
+                
+                # Store in ID map - use 'id' field or index as string
+                source_id = source_dict.get("id") or str(idx)
+                source_id_map[source_id] = source_dict
+                source_id_map[str(idx)] = source_dict  # Also map by index
+                source_pool.append(source_dict)
+            
+            # Also collect other source arrays into the pool - check MORE variants
+            other_source_fields = [
+                ("groundingAttributions", gm_dict.get("grounding_attributions") or gm_dict.get("groundingAttributions")),
+                ("groundingChunks", gm_dict.get("grounding_chunks") or gm_dict.get("groundingChunks")),
+                ("groundingSupports", gm_dict.get("grounding_supports") or gm_dict.get("groundingSupports")),
+                ("supportingContent", gm_dict.get("supporting_content") or gm_dict.get("supportingContent")),
+                ("webSearchSources", gm_dict.get("webSearchSources") or gm_dict.get("web_search_sources")),
+                ("sources", gm_dict.get("sources")),
+                # Add more field variants that appear in newer SDKs
+                ("citedChunks", gm_dict.get("cited_chunks") or gm_dict.get("citedChunks")),
+                ("searchEntryPoint", gm_dict.get("search_entry_point") or gm_dict.get("searchEntryPoint")),
+                ("retrievedContexts", gm_dict.get("retrieved_contexts") or gm_dict.get("retrievedContexts")),
             ]
             
-            for pool in pools:
-                if not pool: continue
-                for it in pool or []:
-                    norm = {}
-                    if isinstance(it, dict):
-                        # Extract from flat dict fields
-                        for k in ("uri","url","source_uri","title","license","snippet","text","pageUrl","sourceUrl"):
-                            v = it.get(k)
-                            if v:
-                                if k in ("url","pageUrl","sourceUrl") and "uri" not in norm: 
-                                    norm["uri"] = v
-                                else: 
-                                    norm[k] = v
+            # Also check citationMetadata if present
+            if "citationMetadata" in gm_dict or "citation_metadata" in gm_dict:
+                cit_meta = gm_dict.get("citationMetadata") or gm_dict.get("citation_metadata") or {}
+                if isinstance(cit_meta, dict):
+                    if "citations" in cit_meta:
+                        other_source_fields.append(("citationMetadata.citations", cit_meta["citations"]))
+            
+            for field_name, field_value in other_source_fields:
+                if field_value:
+                    for item in field_value:
+                        item_dict = item if isinstance(item, dict) else {}
+                        if not isinstance(item, dict):
+                            # Convert object to dict
+                            for attr in ["uri", "url", "source_uri", "title", "snippet", "text", 
+                                       "pageUrl", "sourceUrl", "summary", "domain", "host", "web"]:
+                                if hasattr(item, attr):
+                                    item_dict[attr] = getattr(item, attr)
+                            
+                            # Check nested objects
+                            for nested_attr in ["source", "web", "reference", "support"]:
+                                try:
+                                    nested = getattr(item, nested_attr, None)
+                                    if nested:
+                                        item_dict[nested_attr] = {}
+                                        for sub_attr in ["uri", "url", "title", "domain", "host"]:
+                                            try:
+                                                val = getattr(nested, sub_attr, None)
+                                                if val:
+                                                    item_dict[nested_attr][sub_attr] = val
+                                            except Exception:
+                                                pass
+                                except Exception:
+                                    pass
                         
-                        # Check nested structures
-                        for subkey in ("source","web","reference"):
-                            sub = it.get(subkey) if isinstance(it.get(subkey), dict) else None
-                            if sub:
-                                u = sub.get("uri") or sub.get("url")
-                                if u and "uri" not in norm: norm["uri"] = u
-                                ttl = sub.get("title")
-                                if ttl and "title" not in norm: norm["title"] = ttl
-                    else:
-                        # Handle object-like items
-                        for k in ("uri","url","source_uri","title","license","snippet","text","pageUrl","sourceUrl"):
-                            try: v = getattr(it, k, None)
-                            except Exception: v = None
-                            if v:
-                                if k in ("url","pageUrl","sourceUrl") and "uri" not in norm: 
-                                    norm["uri"] = v
-                                else: 
-                                    norm[k] = v
-                        
-                        # Check nested object attributes
-                        for subkey in ("source","web","reference"):
-                            try: sub = getattr(it, subkey, None)
-                            except Exception: sub = None
-                            if sub:
-                                u = getattr(sub, "uri", None) or getattr(sub, "url", None)
-                                if u and "uri" not in norm: norm["uri"] = u
-                                ttl = getattr(sub, "title", None)
-                                if ttl and "title" not in norm: norm["title"] = ttl
-                    
-                    add(norm)
+                        if item_dict:
+                            source_pool.append(item_dict)
+            
+            # STEP 2: Process citations (v1 pattern - these reference sourceIds)
+            citations_refs = gm_dict.get("citations") or []
+            anchored_sources = set()  # Track which sources have been anchored
+            
+            for cit_ref in citations_refs:
+                cit_dict = cit_ref if isinstance(cit_ref, dict) else {}
+                if not isinstance(cit_ref, dict):
+                    # Convert object to dict
+                    for attr in ["sourceId", "sourceIds", "sourceIndices", "url", "uri"]:
+                        if hasattr(cit_ref, attr):
+                            cit_dict[attr] = getattr(cit_ref, attr)
+                
+                # Check for sourceId references (v1 JOIN pattern)
+                source_ids = []
+                if "sourceId" in cit_dict:
+                    source_ids.append(str(cit_dict["sourceId"]))
+                elif "sourceIds" in cit_dict:
+                    source_ids.extend([str(sid) for sid in cit_dict["sourceIds"]])
+                elif "sourceIndices" in cit_dict:
+                    source_ids.extend([str(idx) for idx in cit_dict["sourceIndices"]])
+                
+                # JOIN: resolve sourceIds to actual sources
+                if source_ids:
+                    for sid in source_ids:
+                        if sid in source_id_map:
+                            source_dict = source_id_map[sid]
+                            add_citation(source_dict)
+                            anchored_sources.add(sid)  # Mark as anchored
+                # Direct URL in citation (some variants)
+                elif cit_dict.get("url") or cit_dict.get("uri"):
+                    add_citation(cit_dict)
+            
+            # STEP 3: Always flush unlinked sources from the pool
+            # Emit sources that weren't referenced by citations (unlinked)
+            for idx, source_dict in enumerate(source_pool[:10]):
+                # Check if this source was already emitted as anchored
+                source_id = source_dict.get("id") or str(idx)
+                if source_id not in anchored_sources:
+                    # Add as unlinked source
+                    add_citation(source_dict)
+        
+        # Log forensics if tools called but no citations
+        if DEBUG_GROUNDING and not citations:
+            # Check if tools were used
+            tool_count = 0
+            if hasattr(resp, "candidates") and resp.candidates:
+                for cand in resp.candidates:
+                    if hasattr(cand, "content") and hasattr(cand.content, "parts"):
+                        for part in cand.content.parts:
+                            if hasattr(part, "function_call"):
+                                tool_count += 1
+            
+            if tool_count > 0:
+                # Log warning with metadata keys found
+                gm_keys = []
+                if gm_dict:
+                    gm_keys = list(gm_dict.keys())[:10]  # First 10 keys
+                
+                logger.warning(f"[CITATIONS] Vertex: {tool_count} tool calls but 0 citations extracted. "
+                             f"Grounding metadata keys found: {gm_keys}")
+                
+                # Log first raw object for debugging
+                if gm_dict:
+                    first_items = {}
+                    for key, val in gm_dict.items():
+                        if val and hasattr(val, '__iter__'):
+                            try:
+                                first_items[key] = str(list(val)[:2])[:200]  # First 2 items, truncated
+                            except:
+                                pass
+                    if first_items:
+                        logger.debug(f"[CITATIONS] Sample grounding data: {first_items}")
+    
     except Exception as e:
-        logger.debug(f"Error in _extract_vertex_citations2: {e}")
+        logger.debug(f"Error in _extract_vertex_citations: {e}")
+    
+    # Enhanced forensics for tools>0 & citations==0
+    tool_count = 0
+    anchored_count = len([c for c in citations if c.get('source_type') != 'unlinked'])
+    
+    # Count tool calls
+    if hasattr(resp, 'candidates'):
+        for cand in resp.candidates:
+            if hasattr(cand, 'content') and hasattr(cand.content, 'parts'):
+                for part in cand.content.parts:
+                    if hasattr(part, 'function_call'):
+                        tool_count += 1
+    
+    # Forensics logging when tools called but no anchored citations
+    if tool_count > 0 and anchored_count == 0:
+        forensics = {
+            'tool_call_count': tool_count,
+            'anchored_citations_count': anchored_count,
+            'unlinked_sources_count': len(citations),
+            'typed_candidates_count': len(typed_candidates) if 'typed_candidates' in locals() else 0,
+            'dict_candidates_count': len(dict_candidates) if 'dict_candidates' in locals() else 0,
+            'citations_shape_set': list(set(c.get('source_type', 'unknown') for c in citations)),
+            'why_not_grounded': 'no_anchored_citations'
+        }
+        
+        # Add candidate preview (capped to 1KB)
+        if 'n' in locals() and n > 0:
+            candidate_preview = []
+            for i in range(min(2, n)):  # First 2 candidates
+                preview = {
+                    'index': i,
+                    'has_typed': i < len(typed_candidates) if 'typed_candidates' in locals() else False,
+                    'has_dict': i < len(dict_candidates) if 'dict_candidates' in locals() else False
+                }
+                candidate_preview.append(preview)
+            
+            forensics['candidate_preview'] = str(candidate_preview)[:1024]
+        
+        logger.warning(f"[CITATIONS_FORENSICS] Tools called but no anchored citations: {forensics}")
+    
+    # Text-harvest fallback (AUTO-only, when enabled)
+    if settings.text_harvest_auto_only and tool_count > 0 and anchored_count == 0:
+        # Extract URLs from response text
+        import re
+        url_pattern = r'https?://[^\s<>"{}|\\^`\[\]]+[^\s<>"{}|\\^`\[\].,;:!?\'"()]'
+        
+        # Get response text
+        response_text = ""
+        try:
+            if hasattr(resp, 'candidates'):
+                for cand in resp.candidates:
+                    if hasattr(cand, 'content') and hasattr(cand.content, 'parts'):
+                        for part in cand.content.parts:
+                            if hasattr(part, 'text'):
+                                response_text += part.text + " "
+        except:
+            pass
+        
+        if response_text:
+            harvested_urls = re.findall(url_pattern, response_text)
+            # Dedupe against existing citations
+            existing_urls = {c['url'] for c in citations}
+            
+            for url in harvested_urls[:5]:  # Limit to 5 harvested URLs
+                if url not in existing_urls:
+                    citations.append({
+                        'provider': 'vertex',
+                        'url': url,
+                        'source_domain': _get_registrable_domain(url),
+                        'title': '',
+                        'snippet': '',
+                        'source_type': 'text_harvest',
+                        'rank': len(citations) + 1,
+                        'raw': {'harvested_from_text': True}
+                    })
+            
+            if harvested_urls:
+                logger.info(f"[TEXT_HARVEST] Added {len(harvested_urls)} URLs from text (AUTO mode)")
+    
+    # Apply budget-limited batch resolution to all citations
+    if citations:
+        citations = resolve_citations_with_budget(citations)
+        
+        # Update source_domain for resolved citations
+        for citation in citations:
+            resolved_url = citation.get("resolved_url") or citation.get("url")
+            if resolved_url:
+                # Re-extract domain using resolved URL
+                citation["source_domain"] = registrable_domain_from_url(resolved_url) or citation.get("source_domain", "")
     
     return citations
 
@@ -408,12 +954,10 @@ def _sanitize_list(items: list) -> list:
         # Skip SDK objects
     return clean_list
 
-def _extract_vertex_citations(resp: Any) -> list:
+def _extract_vertex_citations_old(resp: Any) -> list:
     """
-    Collect grounding attributions from Vertex/Gemini grounded responses (Step-1).
-    Returns normalized list:
-      {provider:"vertex", url, title, snippet/evidence_text, source_type, rank}
-    Enhanced to handle multiple SDK variants and field names including grounding_chunks and grounding_supports.
+    [DEPRECATED - kept for reference only]
+    Old Vertex citation extractor.
     """
     out = []
     try:
@@ -772,16 +1316,20 @@ class VertexAdapter:
         return system_text, contents
     
     def _create_generation_config_step1(self, req: LLMRequest) -> gm.GenerationConfig:
-        """Create generation config for Step 1 (grounded, NO JSON)."""
+        """Create generation config for Step 1 (grounded or ungrounded, NO JSON)."""
         # For ungrounded requests, ensure minimum tokens to avoid empty responses
         # Vertex doesn't return partial content when hitting MAX_TOKENS
         requested_tokens = getattr(req, "max_tokens", 6000)
         is_grounded = getattr(req, "grounded", False)
         
-        # Apply minimum only for ungrounded to avoid empty responses
-        if not is_grounded and requested_tokens < 500:
-            logger.warning(f"Increasing max_tokens from {requested_tokens} to 500 for Vertex ungrounded (avoids empty responses)")
-            max_tokens = 500
+        # For ungrounded: increase minimum tokens to avoid empty responses
+        if not is_grounded:
+            # Increase minimum to 1500 for news-style prompts (more verbose)
+            if requested_tokens < 1500:
+                logger.warning(f"Increasing max_tokens from {requested_tokens} to 1500 for Vertex ungrounded (avoids empty responses)")
+                max_tokens = 1500
+            else:
+                max_tokens = requested_tokens
         else:
             max_tokens = requested_tokens
             
@@ -790,7 +1338,16 @@ class VertexAdapter:
             "top_p": getattr(req, "top_p", 0.95),
             "max_output_tokens": max_tokens,
         }
-        # Step 1: NO response_mime_type - we want prose with citations
+        
+        # For ungrounded: slightly reduce temperature for stability, but DON'T force text/plain on first attempt
+        if not is_grounded:
+            # Only slightly reduce temperature for more stable ungrounded generation
+            if config_dict["temperature"] > 0.5:
+                config_dict["temperature"] = max(0.5, config_dict["temperature"] - 0.2)
+                logger.debug(f"Reduced temperature to {config_dict['temperature']} for ungrounded stability")
+            # DON'T set response_mime_type here - only use it in retry
+        # For grounded: NO response_mime_type - we want prose with citations
+        
         return gm.GenerationConfig(**config_dict)
     
     def _create_generation_config_step2_json(self) -> gm.GenerationConfig:
@@ -977,7 +1534,8 @@ Provide your response as valid JSON with appropriate keys for the information.""
         if system_instruction:
             config_params["system_instruction"] = system_instruction
             
-        config = genai_types.GenerateContentConfig(response_mime_type='text/plain', **config_params)
+        # DO NOT use response_mime_type='text/plain' for grounded - it strips citations!
+        config = genai_types.GenerateContentConfig(**config_params)
         
         # Wire debug logging
         logger.debug(f"[GENAI] Step-1 grounded call:")
@@ -1099,7 +1657,7 @@ Provide your response as valid JSON with appropriate keys for the information.""
         if not is_valid:
             raise ValueError(f"MODEL_NOT_ALLOWED: {error_msg}")
         
-        # Initialize metadata
+        # Initialize metadata with feature flags
         metadata = {
             "model": model_id,
             "response_api": "vertex_genai",
@@ -1107,7 +1665,15 @@ Provide your response as valid JSON with appropriate keys for the information.""
             "region": os.getenv("VERTEX_LOCATION", "europe-west4"),  # Match init default
             "proxies_enabled": False,
             "proxy_mode": "disabled",
-            "vantage_policy": str(getattr(req, "vantage_policy", "NONE"))
+            "vantage_policy": str(getattr(req, "vantage_policy", "NONE")),
+            # Feature flags for monitoring
+            "feature_flags": {
+                "citation_extractor_v2": settings.citation_extractor_v2,
+                "citation_extractor_enable_legacy": settings.citation_extractor_enable_legacy,
+                "ungrounded_retry_policy": settings.ungrounded_retry_policy,
+                "text_harvest_auto_only": settings.text_harvest_auto_only,
+                "citations_extractor_enable": settings.citations_extractor_enable,
+            }
         }
         
         # Extract ALS block if present (should be in messages already)
@@ -1136,16 +1702,14 @@ Provide your response as valid JSON with appropriate keys for the information.""
         # Surface requested mode for QA/telemetry parity
         metadata["grounding_mode_requested"] = grounding_mode
         
-        # CRITICAL: Fail-closed for grounded requests without google-genai
-        # The vertexai SDK fallback doesn't properly support grounding
+        # Allow SDK fallback for grounded requests (Priority 1 fix)
+        # Log warning but don't block - the SDK path may work
         if is_grounded and not self.use_genai:
-            error_msg = (
-                "GROUNDING_REQUIRES_GENAI: Grounded requests require google-genai client. "
-                f"Current state: GENAI_AVAILABLE={GENAI_AVAILABLE}, use_genai={self.use_genai}. "
-                "To fix: pip install google-genai>=0.8.3 and ensure VERTEX_USE_GENAI_CLIENT != 'false'"
+            logger.warning(
+                f"[VERTEX_GROUNDING] Using SDK fallback for grounded request. "
+                f"google-genai not available (GENAI_AVAILABLE={GENAI_AVAILABLE}). "
+                f"This may have limited functionality compared to google-genai client."
             )
-            logger.error(f"[VERTEX_GROUNDING] {error_msg}")
-            raise ValueError(error_msg)
         
         # Determine two-step requirement
         needs_two_step = is_grounded and is_json_mode
@@ -1171,8 +1735,20 @@ Provide your response as valid JSON with appropriate keys for the information.""
             logger.debug(f"[VERTEX_GROUNDING] Step 1 complete: grounded_effective={grounded_effective}, "
                         f"tool_calls={tool_call_count}")
             
-            # Citations from Step-1
-            step1_citations = _extract_vertex_citations2(step1_resp)
+            # Citations from Step-1 with A/B selection
+            # Extract stable identifiers from request metadata
+            tenant_id = None
+            account_id = None
+            template_id = None
+            if hasattr(req, "meta") and isinstance(req.meta, dict):
+                tenant_id = req.meta.get("tenant_id")
+                account_id = req.meta.get("account_id")
+                template_id = req.meta.get("template_id")
+            
+            step1_citations, citation_telemetry = _select_and_extract_citations(
+                step1_resp, tenant_id=tenant_id, account_id=account_id, template_id=template_id
+            )
+            metadata.update(citation_telemetry)
             step1_text = _extract_text_from_candidates(step1_resp)
             
             # Step 2: Reshape to JSON (NO TOOLS)
@@ -1244,9 +1820,21 @@ Provide your response as valid JSON with appropriate keys for the information.""
             metadata["grounded_effective"] = grounded_effective
             metadata["tool_call_count"] = tool_call_count
             
-            # Citations from Step-1
+            # Citations from Step-1 with A/B selection
             try:
-                cits = _extract_vertex_citations2(response)
+                # Extract stable identifiers from request metadata
+                tenant_id = None
+                account_id = None
+                template_id = None
+                if hasattr(req, "meta") and isinstance(req.meta, dict):
+                    tenant_id = req.meta.get("tenant_id")
+                    account_id = req.meta.get("account_id")
+                    template_id = req.meta.get("template_id")
+                
+                cits, citation_telemetry = _select_and_extract_citations(
+                    response, tenant_id=tenant_id, account_id=account_id, template_id=template_id
+                )
+                metadata.update(citation_telemetry)
                 if cits:
                     metadata["citations"] = cits
                 else:
@@ -1280,10 +1868,12 @@ Provide your response as valid JSON with appropriate keys for the information.""
             if is_json_mode:
                 generation_config = self._create_generation_config_step2_json()
                 max_tokens_used = 6000  # JSON mode uses fixed 6000
+                first_attempt_max_tokens = 6000  # Track for consistency, though JSON doesn't retry
             else:
                 generation_config = self._create_generation_config_step1(req)
-                # Track the actual max_tokens used (may have been increased from 200 to 500)
+                # Track both original and actual tokens for retry logic
                 requested_tokens = getattr(req, "max_tokens", 6000)
+                first_attempt_max_tokens = requested_tokens  # Keep original for retry calculation
                 max_tokens_used = max(requested_tokens, 500) if requested_tokens < 500 else requested_tokens
             
             # First attempt with normal settings
@@ -1329,8 +1919,9 @@ Provide your response as valid JSON with appropriate keys for the information.""
                     should_retry = True
                     retry_reason = f"max_tokens_hit (finish_reason={finish_reason})"
                 
-                # Perform retry if needed (SDK-only, no JSON mode)
-                if should_retry and not is_json_mode:
+                # Perform retry if needed (SDK-only, no JSON mode, and policy allows)
+                retry_allowed = settings.ungrounded_retry_policy in ["aggressive", "conservative"]
+                if should_retry and not is_json_mode and retry_allowed:
                     logger.info(f"Retrying Vertex ungrounded due to: {retry_reason}")
                     metadata["retry_attempted"] = True
                     metadata["retry_reason"] = retry_reason
@@ -1340,8 +1931,13 @@ Provide your response as valid JSON with appropriate keys for the information.""
                     original_temp = getattr(req, "temperature", 0.7)
                     retry_temp = min(original_temp * 0.9, 0.6)  # Slight reduction, but stay user-like
                     
-                    # Increase tokens more aggressively on retry (2x instead of 1.5x)
-                    retry_max_tokens = min(int(max_tokens_used * 2), 2000)  # Double, but cap at 2000
+                    # Fix: Use original tokens for retry calculation, ensure retry >= first attempt
+                    # Cap at model max (8192) to prevent infinite MAX_TOKENS loops
+                    model_max = 8192
+                    retry_max_tokens = min(
+                        max(int((first_attempt_max_tokens or 1500) * 2), 3000, max_tokens_used),
+                        model_max
+                    )
                     
                     retry_config = gm.GenerationConfig(
                         temperature=retry_temp,

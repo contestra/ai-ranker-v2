@@ -97,6 +97,32 @@ class Settings(BaseSettings):
     openai_gate_in_batch:   bool = Field(False, description="Apply OpenAI rate limiting in batch runner (legacy)")
     
     finalize_lowers_concurrency: bool = Field(True, description="Drop concurrency when finalize bursts happen")
+    
+    # ------------------------------
+    # Citation Extraction Feature Flags
+    # ------------------------------
+    citation_extractor_v2: float = Field(
+        0.0,
+        description="Fraction of traffic to use new citation extractor (0.0-1.0)",
+        ge=0.0,
+        le=1.0
+    )
+    citation_extractor_enable_legacy: bool = Field(
+        True,
+        description="Enable legacy citation extraction as fallback"
+    )
+    ungrounded_retry_policy: str = Field(
+        "conservative",
+        description="Retry policy for ungrounded: conservative|aggressive|disabled"
+    )
+    text_harvest_auto_only: bool = Field(
+        False,
+        description="Enable text harvest only for AUTO mode (not REQUIRED)"
+    )
+    citations_extractor_enable: bool = Field(
+        True,
+        description="Master kill switch for citation extraction"
+    )
 
     class Config:
         env_file = ".env"
