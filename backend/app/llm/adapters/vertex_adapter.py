@@ -42,6 +42,9 @@ logger = logging.getLogger(__name__)
 
 # Debug flag for citation extraction
 DEBUG_GROUNDING = os.getenv("DEBUG_GROUNDING", "false").lower() == "true"
+# Optional: emit unlinked (non-anchored) sources when no anchored citations were found.
+# Default false to keep telemetry clean; can be enabled per-run via env.
+EMIT_UNLINKED_SOURCES = os.getenv("CITATION_EXTRACTOR_EMIT_UNLINKED", "false").lower() == "true"
 
 def _get_registrable_domain(url: str) -> str:
     """
@@ -188,6 +191,7 @@ def _select_and_extract_citations(resp, tenant_id: str = None, account_id: str =
     
     # Clamp citation_extractor_v2 to [0, 1] for safety
     v2_threshold = max(0.0, min(1.0, settings.citation_extractor_v2))
+    print(f"[DEBUG] citation_extractor_v2={settings.citation_extractor_v2}, v2_threshold={v2_threshold}, bucket={bucket}")
     
     # Boundary rule: bucket strictly less than threshold goes to V2
     # e.g., 0.05 threshold means buckets [0, 0.05) get V2 (exactly 5%)
@@ -198,6 +202,7 @@ def _select_and_extract_citations(resp, tenant_id: str = None, account_id: str =
         "citation_extractor_v2": settings.citation_extractor_v2,
         "citations_extractor_enable": settings.citations_extractor_enable,
         "citation_extractor_enable_legacy": settings.citation_extractor_enable_legacy,
+        "emit_unlinked_enabled": EMIT_UNLINKED_SOURCES,
     }
     
     # Try selected variant with fallback
@@ -256,6 +261,7 @@ def _select_and_extract_citations(resp, tenant_id: str = None, account_id: str =
     telemetry["anchored_citations_count"] = anchored_count
     telemetry["unlinked_sources_count"] = unlinked_count
     telemetry["citations_shape_set"] = list(shape_set)
+    telemetry["emit_unlinked_enabled"] = EMIT_UNLINKED_SOURCES
     
     return citations, telemetry
 
@@ -312,7 +318,19 @@ def _extract_vertex_citations(resp) -> List[Dict]:
     citations = []
     seen_urls = {}  # normalized_url -> citation dict (for deduplication)
     
-    def add_citation(raw_item: dict):
+    # DEBUG: Log what type of response we got
+    print(f"[CITATIONS_DEBUG] Response type: {type(resp)}")
+    if hasattr(resp, 'candidates'):
+        print(f"[CITATIONS_DEBUG] Has candidates: {len(resp.candidates) if resp.candidates else 0}")
+        if resp.candidates and len(resp.candidates) > 0:
+            cand = resp.candidates[0]
+            print(f"[CITATIONS_DEBUG] Candidate type: {type(cand)}")
+            if hasattr(cand, 'grounding_metadata'):
+                print(f"[CITATIONS_DEBUG] Has grounding_metadata attr")
+            if hasattr(cand, 'groundingMetadata'):
+                print(f"[CITATIONS_DEBUG] Has groundingMetadata attr")
+    
+    def add_citation(raw_item: dict, source_type: Optional[str] = None):
         if not raw_item:
             return
         
@@ -398,7 +416,7 @@ def _extract_vertex_citations(resp) -> List[Dict]:
             "source_domain": "",  # Will be set after resolution
             "title": title,
             "snippet": snippet,
-            "source_type": "web",
+            "source_type": (source_type or "web"),
             "rank": len(citations) + 1,
             "raw": raw_item
         }
@@ -539,6 +557,22 @@ def _extract_vertex_citations(resp) -> List[Dict]:
                 source_id_map[str(idx)] = source_dict  # Also map by index
                 source_pool.append(source_dict)
             
+            # DEBUG: Log what we have in gm_dict
+            if DEBUG_GROUNDING and gm_dict:
+                logger.info(f"[CITATIONS_DEBUG] gm_dict keys: {list(gm_dict.keys())}")
+                # Log sample of each key
+                for key in list(gm_dict.keys())[:5]:
+                    val = gm_dict[key]
+                    if isinstance(val, list) and val:
+                        logger.info(f"[CITATIONS_DEBUG] {key}[0]: {str(val[0])[:200]}")
+                        # Check if val is empty after conversion
+                        if key == "grounding_chunks":
+                            logger.info(f"[CITATIONS_DEBUG] grounding_chunks has {len(val)} items")
+                            for i, chunk in enumerate(val[:2]):
+                                logger.info(f"[CITATIONS_DEBUG] chunk[{i}] type: {type(chunk)}, is_dict: {isinstance(chunk, dict)}")
+                    elif val:
+                        logger.info(f"[CITATIONS_DEBUG] {key}: {str(val)[:200]}")
+            
             # Also collect other source arrays into the pool - check MORE variants
             other_source_fields = [
                 ("groundingAttributions", gm_dict.get("grounding_attributions") or gm_dict.get("groundingAttributions")),
@@ -587,6 +621,19 @@ def _extract_vertex_citations(resp) -> List[Dict]:
                                 except Exception:
                                     pass
                         
+                        # Special handling for grounding_chunks which have nested web field
+                        if field_name == "groundingChunks" and isinstance(item_dict, dict):
+                            # grounding_chunks have structure: {'web': {'uri': '...', 'domain': '...', ...}}
+                            if 'web' in item_dict and isinstance(item_dict['web'], dict):
+                                web_data = item_dict['web']
+                                # Flatten the web field into the top level for easier processing
+                                if 'uri' in web_data:
+                                    item_dict['url'] = web_data['uri']
+                                if 'domain' in web_data:
+                                    item_dict['source_domain'] = web_data['domain']
+                                if 'title' in web_data:
+                                    item_dict['title'] = web_data.get('title', '')
+                        
                         if item_dict:
                             source_pool.append(item_dict)
             
@@ -616,20 +663,33 @@ def _extract_vertex_citations(resp) -> List[Dict]:
                     for sid in source_ids:
                         if sid in source_id_map:
                             source_dict = source_id_map[sid]
-                            add_citation(source_dict)
+                            add_citation(source_dict, source_type="v1_join")
                             anchored_sources.add(sid)  # Mark as anchored
                 # Direct URL in citation (some variants)
                 elif cit_dict.get("url") or cit_dict.get("uri"):
-                    add_citation(cit_dict)
+                    add_citation(cit_dict, source_type="direct_uri")
             
-            # STEP 3: Always flush unlinked sources from the pool
-            # Emit sources that weren't referenced by citations (unlinked)
-            for idx, source_dict in enumerate(source_pool[:10]):
-                # Check if this source was already emitted as anchored
-                source_id = source_dict.get("id") or str(idx)
-                if source_id not in anchored_sources:
-                    # Add as unlinked source
-                    add_citation(source_dict)
+            # Determine if tools were called for this candidate (cheap, typed-path only)
+            tools_called = False
+            try:
+                if typed_cand and hasattr(typed_cand, "content") and hasattr(typed_cand.content, "parts"):
+                    for _part in typed_cand.content.parts:
+                        if hasattr(_part, "function_call") and _part.function_call:
+                            tools_called = True
+                            break
+            except Exception:
+                pass
+            
+            # STEP 3: Optionally flush unlinked sources
+            # Emit sources that weren't referenced by citations (unlinked) when:
+            #  - at least one anchored citation exists, OR
+            #  - explicit override via CITATION_EXTRACTOR_EMIT_UNLINKED=true, OR
+            #  - tools were called (evidence came back without text-anchored spans)
+            if anchored_sources or EMIT_UNLINKED_SOURCES or tools_called:
+                for idx, source_dict in enumerate(source_pool[:10]):
+                    source_id = source_dict.get("id") or str(idx)
+                    if source_id not in anchored_sources:
+                        add_citation(source_dict, source_type="unlinked")
         
         # Log forensics if tools called but no citations
         if DEBUG_GROUNDING and not citations:
@@ -687,7 +747,7 @@ def _extract_vertex_citations(resp) -> List[Dict]:
             'typed_candidates_count': len(typed_candidates) if 'typed_candidates' in locals() else 0,
             'dict_candidates_count': len(dict_candidates) if 'dict_candidates' in locals() else 0,
             'citations_shape_set': list(set(c.get('source_type', 'unknown') for c in citations)),
-            'why_not_grounded': 'no_anchored_citations'
+            'citations_status_reason': 'no_anchored_citations'
         }
         
         # Add candidate preview (capped to 1KB)
@@ -1783,7 +1843,7 @@ Provide your response as valid JSON with appropriate keys for the information.""
             else:
                 # Forensic audit when tools were used but no citations found
                 if metadata.get("tool_call_count", 0) > 0:
-                    metadata["why_not_grounded"] = "citations_missing_in_metadata"
+                    metadata["citations_status_reason"] = "citations_missing_despite_tool_calls"
                     audit = _audit_grounding_metadata(step1_resp)
                     metadata["citations_audit"] = audit
                     
@@ -1793,7 +1853,7 @@ Provide your response as valid JSON with appropriate keys for the information.""
                         "tool_calls": tool_call_count,
                         "citations": 0,
                         "keys": audit.get("grounding_metadata_keys", []),
-                        "why_not_grounded": "citations_missing_in_metadata"
+                        "citations_status_reason": "citations_missing_despite_tool_calls"
                     }
                     logger.info(f"[VERTEX_CITATION_AUDIT] {json.dumps(structured_log)}")
             
@@ -1840,7 +1900,7 @@ Provide your response as valid JSON with appropriate keys for the information.""
                 else:
                     # Forensic audit when tools were used but no citations found
                     if metadata.get("tool_call_count", 0) > 0:
-                        metadata["why_not_grounded"] = "citations_missing_in_metadata"
+                        metadata["citations_status_reason"] = "citations_missing_despite_tool_calls"
                         audit = _audit_grounding_metadata(response)
                         metadata["citations_audit"] = audit
                         
@@ -1850,7 +1910,7 @@ Provide your response as valid JSON with appropriate keys for the information.""
                             "tool_calls": tool_call_count,
                             "citations": 0,
                             "keys": audit.get("grounding_metadata_keys", []),
-                            "why_not_grounded": "citations_missing_in_metadata"
+                            "citations_status_reason": "citations_missing_despite_tool_calls"
                         }
                         logger.info(f"[VERTEX_CITATION_AUDIT] {json.dumps(structured_log)}")
             except Exception:

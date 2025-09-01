@@ -163,14 +163,77 @@ def _extract_openai_citations(response) -> List[Dict]:
             seen_urls[normalized] = citation
             citations.append(citation)
         
-        # 1. Check tool outputs for web_search/web_search_preview results
+        # 1. Try typed path first (Responses SDK returns typed objects)
         if hasattr(response, 'output') and response.output:
             rank_counter = 1
             for item in response.output:
-                if not isinstance(item, dict):
-                    continue
+                # Handle typed objects first
+                if hasattr(item, 'type'):
+                    item_type = getattr(item, 'type', '')
+                    
+                    # web_search or web_search_preview tool results (typed)
+                    if item_type in ['web_search', 'web_search_preview']:
+                        content = getattr(item, 'content', None)
+                        if content:
+                            # Try to parse as typed results first
+                            if hasattr(content, 'results'):
+                                results = getattr(content, 'results', [])
+                                for idx, result in enumerate(results):
+                                    if hasattr(result, 'url'):
+                                        add_citation(
+                                            url=getattr(result, 'url', ''),
+                                            title=getattr(result, 'title', ''),
+                                            snippet=getattr(result, 'snippet', ''),
+                                            rank=idx + 1,
+                                            raw_data={"tool_type": item_type}
+                                        )
+                            elif isinstance(content, str):
+                                # Parse string content
+                                lines = content.split('\n')
+                                for line in lines:
+                                    url_match = re.search(r'https?://[^\s]+', line)
+                                    if url_match:
+                                        url = url_match.group(0).rstrip('.,;)')
+                                        title = line[:url_match.start()].strip(' -•·')
+                                        add_citation(url, title=title, rank=rank_counter,
+                                                   raw_data={"tool_type": item_type})
+                                        rank_counter += 1
+                    
+                    # url_citation annotations (typed) - these are ANCHORED
+                    elif item_type == 'url_citation':
+                        add_citation(
+                            url=getattr(item, 'url', ''),
+                            title=getattr(item, 'title', ''),
+                            snippet=getattr(item, 'snippet', ''),
+                            source_type="annotation",  # Anchored to text
+                            raw_data={"type": "url_citation"}
+                        )
+                    
+                    # tool_result frames (typed)
+                    elif item_type == 'tool_result':
+                        tool_name = getattr(item, 'name', '')
+                        if tool_name in ['web_search', 'web_search_preview']:
+                            content = getattr(item, 'content', '')
+                            if isinstance(content, str) and content:
+                                # Parse structured JSON if present
+                                try:
+                                    content_data = json.loads(content)
+                                    if isinstance(content_data, dict):
+                                        results = content_data.get('results', [])
+                                        for idx, result in enumerate(results):
+                                            add_citation(
+                                                url=result.get('url', ''),
+                                                title=result.get('title', ''),
+                                                snippet=result.get('snippet', ''),
+                                                rank=idx + 1,
+                                                raw_data=result
+                                            )
+                                except (json.JSONDecodeError, TypeError):
+                                    pass
                 
-                item_type = item.get('type', '')
+                # Fall back to dict handling if not typed
+                elif isinstance(item, dict):
+                    item_type = item.get('type', '')
                 
                 # web_search or web_search_preview tool results
                 if item_type in ['web_search', 'web_search_preview']:
@@ -243,20 +306,52 @@ def _extract_openai_citations(response) -> List[Dict]:
                                         raw_data=result
                                     )
         
-        # 2. Check message content for annotations (if present)
-        if hasattr(response, 'message') and response.message:
-            content = response.message.get('content', '')
-            
-            # Look for embedded annotations
-            if isinstance(content, dict) and 'annotations' in content:
-                for ann in content.get('annotations', []):
-                    if isinstance(ann, dict) and ann.get('type') == 'url_citation':
-                        add_citation(
-                            url=ann.get('url', ''),
-                            title=ann.get('title', ''),
-                            snippet=ann.get('snippet', ''),
-                            raw_data=ann
-                        )
+        # 2. Check message content for annotations (typed and dict paths)
+        # Look for the last message item in output for url_citation annotations
+        last_message = None
+        if hasattr(response, 'output') and response.output:
+            for item in reversed(response.output):
+                # Typed path
+                if hasattr(item, 'type') and getattr(item, 'type', '') == 'message':
+                    last_message = item
+                    break
+                # Dict path
+                elif isinstance(item, dict) and item.get('type') == 'message':
+                    last_message = item
+                    break
+        
+        if last_message:
+            # Handle typed message
+            if hasattr(last_message, 'content'):
+                content = getattr(last_message, 'content', None)
+                if content:
+                    # Check if content is a list of blocks
+                    if hasattr(content, '__iter__') and not isinstance(content, str):
+                        for block in content:
+                            if hasattr(block, 'annotations'):
+                                annotations = getattr(block, 'annotations', [])
+                                for ann in annotations:
+                                    if hasattr(ann, 'type') and getattr(ann, 'type', '') == 'url_citation':
+                                        add_citation(
+                                            url=getattr(ann, 'url', ''),
+                                            title=getattr(ann, 'title', ''),
+                                            snippet=getattr(ann, 'snippet', ''),
+                                            raw_data={"type": "url_citation", "source": "message_annotation"}
+                                        )
+            # Handle dict message
+            elif isinstance(last_message, dict):
+                content = last_message.get('content', [])
+                if isinstance(content, list):
+                    for block in content:
+                        if isinstance(block, dict):
+                            for ann in block.get('annotations', []):
+                                if isinstance(ann, dict) and ann.get('type') == 'url_citation':
+                                    add_citation(
+                                        url=ann.get('url', ''),
+                                        title=ann.get('title', ''),
+                                        snippet=ann.get('snippet', ''),
+                                        raw_data=ann
+                                    )
         
         # Log if tools were called but no citations found
         if DEBUG_GROUNDING and not citations:
@@ -854,11 +949,8 @@ class OpenAIAdapter:
         
         # Check TPM budget before acquiring slot
         # Also get auto-trim suggestion if budget is tight
-        token_reservation_made = False
-        actual_tokens_committed = False
         try:
             should_trim, suggested_max = await _RL.await_tpm(estimated_tokens, effective_tokens)
-            token_reservation_made = True
             
             # Apply auto-trim if needed and allowed
             if should_trim and suggested_max and os.getenv("OPENAI_AUTO_TRIM", "true").lower() == "true":
@@ -872,12 +964,11 @@ class OpenAIAdapter:
             logger.warning(f"[RL_WARN] Rate limiting issue: {_e}")
             raise
         
-        try:
-            # Proxy support removed - using direct connection only
-            _client_for_call = self.client
-            
-            # Initialize tracking variables for logging/telemetry
-            vantage_policy = str(getattr(request, 'vantage_policy', 'NONE')).upper().replace("VANTAGEPOLICY.", "")
+        # Proxy support removed - using direct connection only
+        _client_for_call = self.client
+        
+        # Initialize tracking variables for logging/telemetry
+        vantage_policy = str(getattr(request, 'vantage_policy', 'NONE')).upper().replace("VANTAGEPOLICY.", "")
         
         # Ensure these exist even when proxy wiring is absent
         proxy_mode = None  # "rotating"/"backbone" previously; now always None (direct)
@@ -939,7 +1030,7 @@ class OpenAIAdapter:
                 # Known unsupported (both variants failed) → act immediately
                 logger.debug(f"[OPENAI_GROUNDING] Model {model_name} known not to support any web_search variant, "
                            f"proceeding ungrounded (cached)")
-                metadata["why_not_grounded"] = "both_web_search_variants_unsupported"
+                metadata["grounding_status_reason"] = "both_web_search_variants_unsupported"
                 metadata["grounding_not_supported"] = True
                 if grounding_mode == "REQUIRED":
                     logger.debug(f"[OPENAI_GROUNDING] Failing REQUIRED mode due to unsupported model")
@@ -979,15 +1070,25 @@ class OpenAIAdapter:
             if request.json_mode:
                 # JSON mode: instruct to return valid JSON object
                 grounding_instruction = (
-                    f"After finishing any tool calls (limit: {max_web_searches} web searches), "
-                    "you MUST produce a final assistant message containing a single, valid JSON object "
-                    "that answers the user request. Do not output prose or explanations outside the JSON."
+                    "If the question refers to information after your knowledge cutoff or uses recency terms "
+                    "like 'today', 'yesterday', 'this week', 'this month', 'latest', 'right now', 'currently', "
+                    "'as of', 'this morning', 'this afternoon', 'this evening', or 'breaking', you MUST call the "
+                    "web_search tool at least once before answering. After finishing any tool calls (limit: "
+                    f"{max_web_searches} web searches), you MUST produce a final assistant message containing "
+                    "a single, valid JSON object that answers the user request. Do not output prose or "
+                    "explanations outside the JSON."
                 )
             else:
                 # Plain text mode: existing instruction
                 grounding_instruction = (
-                    "After finishing any tool calls, you MUST produce a final assistant message "
-                    f"containing the answer in plain text. Limit yourself to at most {max_web_searches} web searches before answering."
+                    "If the question refers to information after your knowledge cutoff or uses recency terms "
+                    "like 'today', 'yesterday', 'this week', 'this month', 'latest', 'right now', 'currently', "
+                    "'as of', 'this morning', 'this afternoon', 'this evening', or 'breaking', you MUST call the "
+                    "web_search tool at least once before answering. Do not respond from memory and do not include "
+                    "knowledge-cutoff disclaimers when the tool is available. After finishing any tool calls, you "
+                    f"MUST produce one final assistant message in plain text. Use at most {max_web_searches} web "
+                    "searches and prefer primary/official sources. Include url_citation annotations in your final "
+                    "message for each distinct source you relied on."
                 )
             
             if instructions:
@@ -1161,7 +1262,7 @@ class OpenAIAdapter:
                                 # Cache as unsupported (both variants failed)
                                 self._set_cached_tool_type(model_name, "unsupported")
                                 metadata["grounding_not_supported"] = True
-                                metadata["why_not_grounded"] = "hosted_web_search_not_supported_for_model"
+                                metadata["grounding_status_reason"] = "hosted_web_search_not_supported_for_model"
                                 
                                 if grounding_mode == "REQUIRED":
                                     logger.debug(f"[OPENAI_GROUNDING] Failing REQUIRED mode - both variants rejected")
@@ -1228,12 +1329,12 @@ class OpenAIAdapter:
                 "tool_result_count": grounding_analysis["tool_result_count"],
                 "web_search_count": web_search_count,
                 "web_search_queries": grounding_analysis.get("web_search_queries", []),
-                "why_not_grounded": grounding_analysis["why_not_grounded"]
+                "grounding_status_reason": grounding_analysis["why_not_grounded"]
             })
             
             logger.debug(f"[OPENAI_GROUNDING] Analysis: attempted={grounding_analysis['grounding_attempted']}, "
                         f"effective={grounded_effective}, tool_calls={tool_call_count}, "
-                        f"results={grounding_analysis['tool_result_count']}, reason={grounding_analysis['why_not_grounded']}")
+                        f"results={grounding_analysis['tool_result_count']}, reason={grounding_analysis.get('why_not_grounded', 'N/A')}")
             
             # Extract citations if grounding was effective
             if grounded_effective:
@@ -1241,13 +1342,27 @@ class OpenAIAdapter:
                 metadata["citations"] = citations
                 metadata["citation_count"] = len(citations)
                 
+                # Count url_citation annotations specifically (these are anchored)
+                url_citation_count = sum(1 for c in citations 
+                                        if c.get('source_type') == 'annotation'
+                                        or c.get('raw', {}).get('type') == 'url_citation')
+                metadata["url_citations_count"] = url_citation_count
+                
+                # Compute anchored vs unlinked based on source_type
+                # 'annotation' = anchored (url_citations in final message)
+                # 'web' or others = unlinked (from tool results)
+                anchored_count = sum(1 for c in citations if c.get('source_type') == 'annotation')
+                metadata["anchored_citations_count"] = anchored_count
+                metadata["unlinked_sources_count"] = len(citations) - anchored_count
+                
                 if DEBUG_GROUNDING:
-                    logger.debug(f"[CITATIONS] OpenAI: Extracted {len(citations)} citations")
+                    logger.debug(f"[CITATIONS] OpenAI: Extracted {len(citations)} citations, "
+                               f"{url_citation_count} from url_citation annotations")
             
             # REQUIRED mode enforcement with distinction
             if grounding_mode == "REQUIRED" and not grounded_effective:
                 # Distinguish between different failure modes
-                if grounding_analysis["why_not_grounded"] == "web_search_empty_results":
+                if grounding_analysis.get("why_not_grounded") == "web_search_empty_results":
                     # Tool was invoked but returned empty
                     raise GroundingEmptyResultsError(
                         f"GROUNDING_EMPTY_RESULTS: Web search invoked but returned no results. "
@@ -1262,7 +1377,7 @@ class OpenAIAdapter:
                     # Other grounding failures
                     raise GroundingRequiredFailedError(
                         f"GROUNDING_REQUIRED_ERROR: Grounding not effective (mode=REQUIRED). "
-                        f"Reason: {grounding_analysis['why_not_grounded']}"
+                        f"Reason: {grounding_analysis.get('why_not_grounded', 'unknown')}"
                     )
         
         # Check if initial response had reasoning only
@@ -1348,7 +1463,6 @@ class OpenAIAdapter:
                 # Commit actual token usage to rate limiter
                 if total_tokens > 0:
                     await _RL.commit_actual_tokens(total_tokens, estimated_tokens, is_grounded=request.grounded)
-                    actual_tokens_committed = True
         
         # If no usage from provider, use the estimate
         if not usage or usage.get('total_tokens', 0) == 0:
@@ -1596,26 +1710,6 @@ class OpenAIAdapter:
             error_type=error_type,
             error_message=error_message
         )
-        
-        except Exception as e:
-            # If we reserved tokens but didn't commit actual usage, roll back
-            if token_reservation_made and not actual_tokens_committed:
-                try:
-                    # Commit with 0 actual tokens to release the reservation
-                    await _RL.commit_actual_tokens(0, estimated_tokens, is_grounded=request.grounded)
-                    logger.debug(f"[RL_ROLLBACK] Released token reservation of {estimated_tokens} after failure")
-                except Exception as rollback_error:
-                    logger.warning(f"[RL_ROLLBACK] Failed to rollback token reservation: {rollback_error}")
-            raise
-        
-        finally:
-            # Ensure we always commit something if we reserved
-            if token_reservation_made and not actual_tokens_committed:
-                try:
-                    await _RL.commit_actual_tokens(0, estimated_tokens, is_grounded=request.grounded)
-                    logger.debug(f"[RL_CLEANUP] Released unused token reservation")
-                except Exception:
-                    pass
     
     def supports_model(self, model: str) -> bool:
         """Check if model is in allowlist"""

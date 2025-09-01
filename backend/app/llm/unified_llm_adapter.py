@@ -232,6 +232,7 @@ class UnifiedLLMAdapter:
             _fatal_markers = (
                 "GROUNDING_NOT_SUPPORTED",
                 "GROUNDING_REQUIRED_ERROR",
+                "GROUNDING_EMPTY_RESULTS",
             )
             if (grounding_mode == "REQUIRED") and any(m in error_msg for m in _fatal_markers):
                 # Re-raise so HTTP layer / test harness can fail the cell hard
@@ -285,12 +286,31 @@ class UnifiedLLMAdapter:
                 grounding_failed = True
                 failure_reason = "Model did not invoke grounding tools"
             
-            # Check for citations (even if grounded_effective is True)
+            # Check for ANCHORED citations (unlinked-only is insufficient for REQUIRED)
             elif hasattr(response, 'metadata') and response.metadata:
                 citations = response.metadata.get('citations', [])
-                if not citations:
+                
+                # Check if we have the anchored count directly in metadata
+                anchored_count = response.metadata.get('anchored_citations_count', None)
+                
+                if anchored_count is None and citations:
+                    # Compute anchored count from citations list
+                    # OpenAI: 'annotation' means anchored to text
+                    # Vertex: 'direct_uri', 'v1_join', 'groundingChunks' are anchored
+                    if request.vendor == 'openai':
+                        anchored_types = {'annotation', 'url_citation'}  # url_citation for backward compat
+                    else:
+                        anchored_types = {'direct_uri', 'v1_join', 'groundingChunks'}
+                    
+                    anchored_count = sum(1 for c in citations 
+                                       if c.get('source_type') in anchored_types)
+                
+                if not citations or (anchored_count is not None and anchored_count == 0):
                     grounding_failed = True
-                    failure_reason = "Grounding tools invoked but no citations extracted"
+                    if not citations:
+                        failure_reason = "Grounding tools invoked but no citations extracted"
+                    else:
+                        failure_reason = f"Grounding tools invoked but only unlinked sources found (need anchored citations for REQUIRED mode)"
             else:
                 # No metadata at all
                 grounding_failed = True
@@ -445,9 +465,13 @@ class UnifiedLLMAdapter:
         for i, msg in enumerate(modified_messages):
             if msg.get('role') == 'user':
                 original_content = msg['content']
+                # Minimal guardrail to avoid "future date" refusals:
+                # Prefer the user's explicit timeframe over any dates implied by ALS.
+                _als_guard = ("Instruction: If the user's question includes an explicit date or timeframe, "
+                              "ignore any dates implied by the ambient context below; use the question's timeframe.")
                 modified_messages[i] = {
                     'role': 'user',
-                    'content': f"{als_block_nfc}\n\n{original_content}"
+                    'content': f"{_als_guard}\n\n{als_block_nfc}\n\n{original_content}"
                 }
                 break
         
