@@ -1,0 +1,132 @@
+[LLM_TIMEOUT] {"vendor": "openai", "model": "gpt-5-chat-latest", "vantage_policy": "NONE", "proxy_mode": "disabled", "country": "none", "grounded": true, "max_tokens": 1000, "timeouts_s": {"connect": 2.0, "read": 120.0, "total": 122.0}, "error_type": "error", "error_msg": "Error code: 400 - {'error': {'message': \"Hosted tool 'web_search_preview' is not supported with gpt-5-chat-latest.\", 'type': 'invalid_request_error', 'param': 'tools', 'code': None}}"}
+[TOOL_FALLBACK] Both tool types unsupported for gpt-5-chat-latest
+Grounding not supported for gpt-5-chat-latest, proceeding without
+[CITATIONS_FORENSICS] Tools called but no anchored citations: {'tool_call_count': 1, 'anchored_citations_count': 0, 'unlinked_sources_count': 4, 'typed_candidates_count': 1, 'dict_candidates_count': 1, 'citations_shape_set': ['unlinked'], 'citations_status_reason': 'no_anchored_citations', 'candidate_preview': "[{'index': 0, 'has_typed': True, 'has_dict': True}]"}
+[CITATIONS] Vertex: 1 tool calls but 0 citations extracted. Grounding metadata keys found: ['google_maps_widget_context_token', 'grounding_chunks', 'grounding_supports', 'retrieval_metadata', 'retrieval_queries', 'search_entry_point', 'web_search_queries']
+[CITATIONS_FORENSICS] Tools called but no anchored citations: {'tool_call_count': 1, 'anchored_citations_count': 0, 'unlinked_sources_count': 0, 'typed_candidates_count': 1, 'dict_candidates_count': 1, 'citations_shape_set': [], 'citations_status_reason': 'no_anchored_citations', 'candidate_preview': "[{'index': 0, 'has_typed': True, 'has_dict': True}]"}
+Increasing max_tokens from 1000 to 1500 for Vertex ungrounded (avoids empty responses)
+Increasing max_tokens from 1000 to 1500 for Vertex ungrounded (avoids empty responses)
+Error extracting text from response: Cannot get the response text.
+Cannot get the Candidate text.
+Response candidate content has no parts (and thus no text). The candidate is likely blocked by the safety filters.
+Content:
+{
+  "role": "model"
+}
+Candidate:
+{
+  "content": {
+    "role": "model"
+  },
+  "finish_reason": "MAX_TOKENS"
+}
+Response:
+{
+  "candidates": [
+    {
+      "content": {
+        "role": "model"
+      },
+      "finish_reason": "MAX_TOKENS"
+    }
+  ],
+  "usage_metadata": {
+    "prompt_token_count": 19,
+    "total_token_count": 1518
+  },
+  "model_version": "gemini-2.5-pro"
+}
+[CITATIONS_FORENSICS] Tools called but no anchored citations: {'tool_call_count': 1, 'anchored_citations_count': 0, 'unlinked_sources_count': 5, 'typed_candidates_count': 1, 'dict_candidates_count': 1, 'citations_shape_set': ['unlinked'], 'citations_status_reason': 'no_anchored_citations', 'candidate_preview': "[{'index': 0, 'has_typed': True, 'has_dict': True}]"}
+[CITATIONS_FORENSICS] Tools called but no anchored citations: {'tool_call_count': 1, 'anchored_citations_count': 0, 'unlinked_sources_count': 10, 'typed_candidates_count': 1, 'dict_candidates_count': 1, 'citations_shape_set': ['unlinked'], 'citations_status_reason': 'no_anchored_citations', 'candidate_preview': "[{'index': 0, 'has_typed': True, 'has_dict': True}]"}
+Increasing max_tokens from 1000 to 1500 for Vertex ungrounded (avoids empty responses)
+Increasing max_tokens from 1000 to 1500 for Vertex ungrounded (avoids empty responses)
+Starting Final Validation Tests...
+Test prompt: What was the most interesting longevity and healthspan extension news during August 2025?
+Configurations: 16 (2 vendors × 2 countries × 2 grounding × 2 ALS)
+
+============================================================
+Testing: openai_US_grounded_ALS
+============================================================
+✓ Success: grounded_effective=False, citations=0, anchored=0
+
+============================================================
+Testing: openai_US_grounded_noALS
+============================================================
+✓ Success: grounded_effective=False, citations=0, anchored=0
+
+============================================================
+Testing: openai_US_ungrounded_ALS
+============================================================
+✓ Success: grounded_effective=False, citations=0, anchored=0
+
+============================================================
+Testing: openai_US_ungrounded_noALS
+============================================================
+✓ Success: grounded_effective=False, citations=0, anchored=0
+
+============================================================
+Testing: openai_DE_grounded_ALS
+============================================================
+✓ Success: grounded_effective=False, citations=0, anchored=0
+
+============================================================
+Testing: openai_DE_grounded_noALS
+============================================================
+✓ Success: grounded_effective=False, citations=0, anchored=0
+
+============================================================
+Testing: openai_DE_ungrounded_ALS
+============================================================
+✓ Success: grounded_effective=False, citations=0, anchored=0
+
+============================================================
+Testing: openai_DE_ungrounded_noALS
+============================================================
+✓ Success: grounded_effective=False, citations=0, anchored=0
+
+============================================================
+Testing: vertex_US_grounded_ALS
+============================================================
+✓ Success: grounded_effective=True, citations=4, anchored=0
+
+============================================================
+Testing: vertex_US_grounded_noALS
+============================================================
+✓ Success: grounded_effective=False, citations=0, anchored=0
+
+============================================================
+Testing: vertex_US_ungrounded_ALS
+============================================================
+✓ Success: grounded_effective=False, citations=0, anchored=0
+
+============================================================
+Testing: vertex_US_ungrounded_noALS
+============================================================
+✓ Success: grounded_effective=False, citations=0, anchored=0
+
+============================================================
+Testing: vertex_DE_grounded_ALS
+============================================================
+✓ Success: grounded_effective=True, citations=5, anchored=0
+
+============================================================
+Testing: vertex_DE_grounded_noALS
+============================================================
+✓ Success: grounded_effective=True, citations=10, anchored=0
+
+============================================================
+Testing: vertex_DE_ungrounded_ALS
+============================================================
+✓ Success: grounded_effective=False, citations=0, anchored=0
+
+============================================================
+Testing: vertex_DE_ungrounded_noALS
+============================================================
+✓ Success: grounded_effective=False, citations=0, anchored=0
+
+Raw results saved to: final_validation_results_20250901_234925.json
+Markdown report saved to: FINAL_VALIDATION_REPORT_20250901_234925.md
+
+============================================================
+FINAL SUMMARY: 16/16 tests passed (100.0%)
+============================================================

@@ -1,0 +1,128 @@
+[CITATIONS_FORENSICS] Tools called but no anchored citations: {'tool_call_count': 1, 'anchored_citations_count': 0, 'unlinked_sources_count': 9, 'typed_candidates_count': 1, 'dict_candidates_count': 1, 'citations_shape_set': ['unlinked'], 'citations_status_reason': 'no_anchored_citations', 'candidate_preview': "[{'index': 0, 'has_typed': True, 'has_dict': True}]"}
+[CITATIONS_FORENSICS] Tools called but no anchored citations: {'tool_call_count': 1, 'anchored_citations_count': 0, 'unlinked_sources_count': 7, 'typed_candidates_count': 1, 'dict_candidates_count': 1, 'citations_shape_set': ['unlinked'], 'citations_status_reason': 'no_anchored_citations', 'candidate_preview': "[{'index': 0, 'has_typed': True, 'has_dict': True}]"}
+[CITATIONS_FORENSICS] Tools called but no anchored citations: {'tool_call_count': 1, 'anchored_citations_count': 0, 'unlinked_sources_count': 5, 'typed_candidates_count': 1, 'dict_candidates_count': 1, 'citations_shape_set': ['unlinked'], 'citations_status_reason': 'no_anchored_citations', 'candidate_preview': "[{'index': 0, 'has_typed': True, 'has_dict': True}]"}
+======================================================================
+QA VISIBILITY TEST - UNLINKED EMISSION ENABLED
+======================================================================
+
+This test enables CITATION_EXTRACTOR_EMIT_UNLINKED=true
+to surface ALL evidence when tools are called.
+This is for QA/debugging only, NOT for production!
+
+Production should keep CITATION_EXTRACTOR_EMIT_UNLINKED=false
+to maintain REQUIRED mode semantics (anchored-only).
+
+======================================================================
+Testing: future_longevity
+Query: What was the most interesting longevity and healthspan extension news ...
+CITATION_EXTRACTOR_EMIT_UNLINKED: true
+======================================================================
+
+📋 CITATIONS FOUND: 9
+   Anchored: 0, Unlinked: 8
+   Types: {'unlinked': 8, 'redirect_only': 1}
+
+   Citation 1:
+     Type: unlinked
+     Title: sciencealert.com...
+     Domain: vertexaisearch.cloud.google.com
+
+   Citation 2:
+     Type: unlinked
+     Title: medicalnewstoday.com...
+     Domain: vertexaisearch.cloud.google.com
+
+   Citation 3:
+     Type: unlinked
+     Title: sciencedaily.com...
+     Domain: vertexaisearch.cloud.google.com
+
+✅ Success - Tool calls: 4, Citations: 9 (Anchored: 0, Unlinked: 8)
+
+======================================================================
+Testing: current_ai
+Query: What are the latest AI developments from OpenAI and Anthropic in 2024?...
+CITATION_EXTRACTOR_EMIT_UNLINKED: true
+======================================================================
+
+📋 CITATIONS FOUND: 7
+   Anchored: 0, Unlinked: 7
+   Types: {'unlinked': 7}
+
+   Citation 1:
+     Type: unlinked
+     Title: analyticsvidhya.com...
+     Domain: vertexaisearch.cloud.google.com
+
+   Citation 2:
+     Type: unlinked
+     Title: substack.com...
+     Domain: vertexaisearch.cloud.google.com
+
+   Citation 3:
+     Type: unlinked
+     Title: forbes.com...
+     Domain: vertexaisearch.cloud.google.com
+
+✅ Success - Tool calls: 2, Citations: 7 (Anchored: 0, Unlinked: 7)
+
+======================================================================
+Testing: current_election
+Query: What were the key results of the 2024 US presidential election?...
+CITATION_EXTRACTOR_EMIT_UNLINKED: true
+======================================================================
+
+📋 CITATIONS FOUND: 5
+   Anchored: 0, Unlinked: 5
+   Types: {'unlinked': 5}
+
+   Citation 1:
+     Type: unlinked
+     Title: wikipedia.org...
+     Domain: vertexaisearch.cloud.google.com
+
+   Citation 2:
+     Type: unlinked
+     Title: wikipedia.org...
+     Domain: vertexaisearch.cloud.google.com
+
+   Citation 3:
+     Type: unlinked
+     Title: britannica.com...
+     Domain: vertexaisearch.cloud.google.com
+
+✅ Success - Tool calls: 1, Citations: 5 (Anchored: 0, Unlinked: 5)
+
+======================================================================
+SUMMARY
+======================================================================
+
+future_longevity: ✅
+  Citations: 9 (Anchored: 0, Unlinked: 8)
+  Types: {'unlinked': 8, 'redirect_only': 1}
+
+current_ai: ✅
+  Citations: 7 (Anchored: 0, Unlinked: 7)
+  Types: {'unlinked': 7}
+
+current_election: ✅
+  Citations: 5 (Anchored: 0, Unlinked: 5)
+  Types: {'unlinked': 5}
+
+📁 Results saved to: qa_visibility_results_20250901_235716.json
+
+======================================================================
+RECOMMENDATIONS
+======================================================================
+
+1. QA/Staging: Enable CITATION_EXTRACTOR_EMIT_UNLINKED=true
+   - Surfaces all evidence for debugging
+   - Shows unlinked sources when tools are called
+
+2. Production: Keep CITATION_EXTRACTOR_EMIT_UNLINKED=false
+   - Maintains REQUIRED mode contract (anchored-only)
+   - Cleaner citation metrics
+
+3. Testing: Use current/past queries for positive cases
+   - Future queries often return empty evidence
+   - Keep one future case as negative control
