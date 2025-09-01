@@ -1,0 +1,216 @@
+{
+  "summary": {
+    "total_tests": 14,
+    "passed": 0,
+    "failed": 14,
+    "warnings": 0,
+    "citation_shapes": {},
+    "grounding_stats": {},
+    "pass_rate": 0.0
+  },
+  "results": [
+    {
+      "test_id": "openai_gpt-5-chat-latest_longevity_brands_grTrue",
+      "vendor": "openai",
+      "model": "gpt-5-chat-latest",
+      "prompt_id": "longevity_brands",
+      "grounded_requested": true,
+      "timestamp": "2025-09-01T13:29:15.459597",
+      "status": "error",
+      "error": "OPENAI_API_KEY required - set in backend/.env",
+      "validation_passed": false,
+      "validation_failures": [
+        "ERROR: openai_gpt-5-chat-latest_longevity_brands_grTrue - OPENAI_API_KEY required - set in backend/.env"
+      ]
+    },
+    {
+      "test_id": "openai_gpt-5-chat-latest_longevity_brands_grFalse",
+      "vendor": "openai",
+      "model": "gpt-5-chat-latest",
+      "prompt_id": "longevity_brands",
+      "grounded_requested": false,
+      "timestamp": "2025-09-01T13:29:15.459609",
+      "status": "error",
+      "error": "OPENAI_API_KEY required - set in backend/.env",
+      "validation_passed": false,
+      "validation_failures": [
+        "ERROR: openai_gpt-5-chat-latest_longevity_brands_grFalse - OPENAI_API_KEY required - set in backend/.env"
+      ]
+    },
+    {
+      "test_id": "vertex_gemini-2.5-pro_longevity_brands_grTrue",
+      "vendor": "vertex",
+      "model": "gemini-2.5-pro",
+      "prompt_id": "longevity_brands",
+      "grounded_requested": true,
+      "timestamp": "2025-09-01T13:29:15.459616",
+      "status": "error",
+      "error": "GOOGLE_CLOUD_PROJECT or VERTEX_PROJECT_ID required - set in backend/.env",
+      "validation_passed": false,
+      "validation_failures": [
+        "ERROR: vertex_gemini-2.5-pro_longevity_brands_grTrue - GOOGLE_CLOUD_PROJECT or VERTEX_PROJECT_ID required - set in backend/.env"
+      ]
+    },
+    {
+      "test_id": "vertex_gemini-2.5-pro_longevity_brands_grFalse",
+      "vendor": "vertex",
+      "model": "gemini-2.5-pro",
+      "prompt_id": "longevity_brands",
+      "grounded_requested": false,
+      "timestamp": "2025-09-01T13:29:15.459623",
+      "status": "error",
+      "error": "GOOGLE_CLOUD_PROJECT or VERTEX_PROJECT_ID required - set in backend/.env",
+      "validation_passed": false,
+      "validation_failures": [
+        "ERROR: vertex_gemini-2.5-pro_longevity_brands_grFalse - GOOGLE_CLOUD_PROJECT or VERTEX_PROJECT_ID required - set in backend/.env"
+      ]
+    },
+    {
+      "test_id": "openai_gpt-5-chat-latest_climate_data_grTrue",
+      "vendor": "openai",
+      "model": "gpt-5-chat-latest",
+      "prompt_id": "climate_data",
+      "grounded_requested": true,
+      "timestamp": "2025-09-01T13:29:17.461538",
+      "status": "error",
+      "error": "OPENAI_API_KEY required - set in backend/.env",
+      "validation_passed": false,
+      "validation_failures": [
+        "ERROR: openai_gpt-5-chat-latest_climate_data_grTrue - OPENAI_API_KEY required - set in backend/.env"
+      ]
+    },
+    {
+      "test_id": "openai_gpt-5-chat-latest_climate_data_grFalse",
+      "vendor": "openai",
+      "model": "gpt-5-chat-latest",
+      "prompt_id": "climate_data",
+      "grounded_requested": false,
+      "timestamp": "2025-09-01T13:29:17.461570",
+      "status": "error",
+      "error": "OPENAI_API_KEY required - set in backend/.env",
+      "validation_passed": false,
+      "validation_failures": [
+        "ERROR: openai_gpt-5-chat-latest_climate_data_grFalse - OPENAI_API_KEY required - set in backend/.env"
+      ]
+    },
+    {
+      "test_id": "vertex_gemini-2.5-pro_climate_data_grTrue",
+      "vendor": "vertex",
+      "model": "gemini-2.5-pro",
+      "prompt_id": "climate_data",
+      "grounded_requested": true,
+      "timestamp": "2025-09-01T13:29:17.461575",
+      "status": "error",
+      "error": "GOOGLE_CLOUD_PROJECT or VERTEX_PROJECT_ID required - set in backend/.env",
+      "validation_passed": false,
+      "validation_failures": [
+        "ERROR: vertex_gemini-2.5-pro_climate_data_grTrue - GOOGLE_CLOUD_PROJECT or VERTEX_PROJECT_ID required - set in backend/.env"
+      ]
+    },
+    {
+      "test_id": "vertex_gemini-2.5-pro_climate_data_grFalse",
+      "vendor": "vertex",
+      "model": "gemini-2.5-pro",
+      "prompt_id": "climate_data",
+      "grounded_requested": false,
+      "timestamp": "2025-09-01T13:29:17.461582",
+      "status": "error",
+      "error": "GOOGLE_CLOUD_PROJECT or VERTEX_PROJECT_ID required - set in backend/.env",
+      "validation_passed": false,
+      "validation_failures": [
+        "ERROR: vertex_gemini-2.5-pro_climate_data_grFalse - GOOGLE_CLOUD_PROJECT or VERTEX_PROJECT_ID required - set in backend/.env"
+      ]
+    },
+    {
+      "test_id": "openai_gpt-5-chat-latest_tech_news_grTrue",
+      "vendor": "openai",
+      "model": "gpt-5-chat-latest",
+      "prompt_id": "tech_news",
+      "grounded_requested": true,
+      "timestamp": "2025-09-01T13:29:19.465579",
+      "status": "error",
+      "error": "OPENAI_API_KEY required - set in backend/.env",
+      "validation_passed": false,
+      "validation_failures": [
+        "ERROR: openai_gpt-5-chat-latest_tech_news_grTrue - OPENAI_API_KEY required - set in backend/.env"
+      ]
+    },
+    {
+      "test_id": "openai_gpt-5-chat-latest_tech_news_grFalse",
+      "vendor": "openai",
+      "model": "gpt-5-chat-latest",
+      "prompt_id": "tech_news",
+      "grounded_requested": false,
+      "timestamp": "2025-09-01T13:29:19.465683",
+      "status": "error",
+      "error": "OPENAI_API_KEY required - set in backend/.env",
+      "validation_passed": false,
+      "validation_failures": [
+        "ERROR: openai_gpt-5-chat-latest_tech_news_grFalse - OPENAI_API_KEY required - set in backend/.env"
+      ]
+    },
+    {
+      "test_id": "vertex_gemini-2.5-pro_tech_news_grTrue",
+      "vendor": "vertex",
+      "model": "gemini-2.5-pro",
+      "prompt_id": "tech_news",
+      "grounded_requested": true,
+      "timestamp": "2025-09-01T13:29:19.465705",
+      "status": "error",
+      "error": "GOOGLE_CLOUD_PROJECT or VERTEX_PROJECT_ID required - set in backend/.env",
+      "validation_passed": false,
+      "validation_failures": [
+        "ERROR: vertex_gemini-2.5-pro_tech_news_grTrue - GOOGLE_CLOUD_PROJECT or VERTEX_PROJECT_ID required - set in backend/.env"
+      ]
+    },
+    {
+      "test_id": "vertex_gemini-2.5-pro_tech_news_grFalse",
+      "vendor": "vertex",
+      "model": "gemini-2.5-pro",
+      "prompt_id": "tech_news",
+      "grounded_requested": false,
+      "timestamp": "2025-09-01T13:29:19.465725",
+      "status": "error",
+      "error": "GOOGLE_CLOUD_PROJECT or VERTEX_PROJECT_ID required - set in backend/.env",
+      "validation_passed": false,
+      "validation_failures": [
+        "ERROR: vertex_gemini-2.5-pro_tech_news_grFalse - GOOGLE_CLOUD_PROJECT or VERTEX_PROJECT_ID required - set in backend/.env"
+      ]
+    },
+    {
+      "test_id": "openai_gpt-5-chat-latest_creative_story_grFalse",
+      "vendor": "openai",
+      "model": "gpt-5-chat-latest",
+      "prompt_id": "creative_story",
+      "grounded_requested": false,
+      "timestamp": "2025-09-01T13:29:21.467937",
+      "status": "error",
+      "error": "OPENAI_API_KEY required - set in backend/.env",
+      "validation_passed": false,
+      "validation_failures": [
+        "ERROR: openai_gpt-5-chat-latest_creative_story_grFalse - OPENAI_API_KEY required - set in backend/.env"
+      ]
+    },
+    {
+      "test_id": "vertex_gemini-2.5-pro_creative_story_grFalse",
+      "vendor": "vertex",
+      "model": "gemini-2.5-pro",
+      "prompt_id": "creative_story",
+      "grounded_requested": false,
+      "timestamp": "2025-09-01T13:29:21.468021",
+      "status": "error",
+      "error": "GOOGLE_CLOUD_PROJECT or VERTEX_PROJECT_ID required - set in backend/.env",
+      "validation_passed": false,
+      "validation_failures": [
+        "ERROR: vertex_gemini-2.5-pro_creative_story_grFalse - GOOGLE_CLOUD_PROJECT or VERTEX_PROJECT_ID required - set in backend/.env"
+      ]
+    }
+  ],
+  "decision": {
+    "go": false,
+    "reasons": [
+      "Overall pass rate (0.0%) below 80% threshold"
+    ]
+  },
+  "timestamp": "2025-09-01T13:29:23.470940"
+}

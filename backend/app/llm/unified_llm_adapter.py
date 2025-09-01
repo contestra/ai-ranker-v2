@@ -518,7 +518,22 @@ class UnifiedLLMAdapter:
                 'model_fingerprint': response.model_fingerprint if hasattr(response, 'model_fingerprint') else None,
                 'normalized_model': request.model,
                 'model_adjusted_for_grounding': request.metadata.get('model_adjusted_for_grounding', False) if hasattr(request, 'metadata') else False,
-                'original_model': request.metadata.get('original_model') if hasattr(request, 'metadata') else None
+                'original_model': request.metadata.get('original_model') if hasattr(request, 'metadata') else None,
+                
+                # Feature flags for A/B testing
+                'feature_flags': response.metadata.get('feature_flags') if hasattr(response, 'metadata') else {},
+                'runtime_flags': response.metadata.get('runtime_flags') if hasattr(response, 'metadata') else {},
+                
+                # Citation metrics
+                'citations_count': 0,  # Will be updated below
+                'anchored_citations_count': response.metadata.get('anchored_citations_count', 0) if hasattr(response, 'metadata') else 0,
+                'unlinked_sources_count': response.metadata.get('unlinked_sources_count', 0) if hasattr(response, 'metadata') else 0,
+                
+                # Additional telemetry
+                'web_search_count': response.metadata.get('web_search_count', 0) if hasattr(response, 'metadata') else 0,
+                'web_grounded': response.metadata.get('web_grounded', False) if hasattr(response, 'metadata') else False,
+                'synthesis_step_used': response.metadata.get('synthesis_step_used', False) if hasattr(response, 'metadata') else False,
+                'extraction_path': response.metadata.get('extraction_path') if hasattr(response, 'metadata') else None
             }
             
             # Cheap derived metric for dashboards - citations count
@@ -537,10 +552,7 @@ class UnifiedLLMAdapter:
                 meta_json['response_api'], meta_json['region']
             )
             
-            # Store structured telemetry as JSON string for now (can be migrated to JSONB later)
-            import json
-            meta_str = json.dumps(meta_json)
-            
+            # Persist comprehensive telemetry with metadata
             telemetry = LLMTelemetry(
                 vendor=request.vendor,
                 model=request.model,
@@ -554,12 +566,13 @@ class UnifiedLLMAdapter:
                 success=response.success,
                 error_type=response.error_type,
                 template_id=request.template_id,
-                run_id=request.run_id
+                run_id=request.run_id,
+                meta=meta_json  # Store rich metadata in JSONB column
             )
             
-            # Store meta_json in memory for later migration to JSONB column
-            # For now, log it comprehensively
-            logger.debug(f"Telemetry metadata: {meta_str}")
+            # Log for debugging
+            import json
+            logger.debug(f"Telemetry metadata: {json.dumps(meta_json)}")
             
             session.add(telemetry)
             await session.flush()

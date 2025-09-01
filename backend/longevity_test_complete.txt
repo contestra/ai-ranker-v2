@@ -1,0 +1,428 @@
+[LLM_TIMEOUT] {"vendor": "openai", "model": "gpt-5-chat-latest", "vantage_policy": "NONE", "proxy_mode": "disabled", "country": "none", "grounded": true, "max_tokens": 500, "timeouts_s": {"connect": 2.0, "read": 120.0, "total": 122.0}, "error_type": "error", "error_msg": "Error code: 400 - {'error': {'message': \"Hosted tool 'web_search_preview' is not supported with gpt-5-chat-latest.\", 'type': 'invalid_request_error', 'param': 'tools', 'code': None}}"}
+[TOOL_FALLBACK] Both tool types unsupported for gpt-5-chat-latest
+Grounding not supported for gpt-5-chat-latest, proceeding without
+Error extracting text from response: Cannot get the response text.
+Cannot get the Candidate text.
+Response candidate content has no parts (and thus no text). The candidate is likely blocked by the safety filters.
+Content:
+{
+  "role": "model"
+}
+Candidate:
+{
+  "content": {
+    "role": "model"
+  },
+  "finish_reason": "MAX_TOKENS"
+}
+Response:
+{
+  "candidates": [
+    {
+      "content": {
+        "role": "model"
+      },
+      "finish_reason": "MAX_TOKENS"
+    }
+  ],
+  "usage_metadata": {
+    "prompt_token_count": 22,
+    "total_token_count": 521
+  },
+  "model_version": "gemini-2.5-pro"
+}
+Error extracting text from response: Cannot get the response text.
+Cannot get the Candidate text.
+Response candidate content has no parts (and thus no text). The candidate is likely blocked by the safety filters.
+Content:
+{
+  "role": "model"
+}
+Candidate:
+{
+  "content": {
+    "role": "model"
+  },
+  "finish_reason": "MAX_TOKENS"
+}
+Response:
+{
+  "candidates": [
+    {
+      "content": {
+        "role": "model"
+      },
+      "finish_reason": "MAX_TOKENS"
+    }
+  ],
+  "usage_metadata": {
+    "prompt_token_count": 22,
+    "total_token_count": 1021
+  },
+  "model_version": "gemini-2.5-pro"
+}
+Retry still produced empty text
+Returning empty response: retry_attempted=False | retry_reason=empty_text | finish_reason=2
+Error extracting text from response: Cannot get the response text.
+Cannot get the Candidate text.
+Response candidate content has no parts (and thus no text). The candidate is likely blocked by the safety filters.
+Content:
+{
+  "role": "model"
+}
+Candidate:
+{
+  "content": {
+    "role": "model"
+  },
+  "finish_reason": "MAX_TOKENS"
+}
+Response:
+{
+  "candidates": [
+    {
+      "content": {
+        "role": "model"
+      },
+      "finish_reason": "MAX_TOKENS"
+    }
+  ],
+  "usage_metadata": {
+    "prompt_token_count": 106,
+    "total_token_count": 605
+  },
+  "model_version": "gemini-2.5-pro"
+}
+Error extracting text from response: Cannot get the response text.
+Cannot get the Candidate text.
+Response candidate content has no parts (and thus no text). The candidate is likely blocked by the safety filters.
+Content:
+{
+  "role": "model"
+}
+Candidate:
+{
+  "content": {
+    "role": "model"
+  },
+  "finish_reason": "MAX_TOKENS"
+}
+Response:
+{
+  "candidates": [
+    {
+      "content": {
+        "role": "model"
+      },
+      "finish_reason": "MAX_TOKENS"
+    }
+  ],
+  "usage_metadata": {
+    "prompt_token_count": 106,
+    "total_token_count": 1105
+  },
+  "model_version": "gemini-2.5-pro"
+}
+Retry still produced empty text
+Returning empty response: retry_attempted=False | retry_reason=empty_text | finish_reason=2
+Error extracting text from response: Cannot get the response text.
+Cannot get the Candidate text.
+Response candidate content has no parts (and thus no text). The candidate is likely blocked by the safety filters.
+Content:
+{
+  "role": "model"
+}
+Candidate:
+{
+  "content": {
+    "role": "model"
+  },
+  "finish_reason": "MAX_TOKENS"
+}
+Response:
+{
+  "candidates": [
+    {
+      "content": {
+        "role": "model"
+      },
+      "finish_reason": "MAX_TOKENS"
+    }
+  ],
+  "usage_metadata": {
+    "prompt_token_count": 22,
+    "total_token_count": 521
+  },
+  "model_version": "gemini-2.5-pro"
+}
+Error extracting text from response: Cannot get the response text.
+Cannot get the Candidate text.
+Response candidate content has no parts (and thus no text). The candidate is likely blocked by the safety filters.
+Content:
+{
+  "role": "model"
+}
+Candidate:
+{
+  "content": {
+    "role": "model"
+  },
+  "finish_reason": "MAX_TOKENS"
+}
+Response:
+{
+  "candidates": [
+    {
+      "content": {
+        "role": "model"
+      },
+      "finish_reason": "MAX_TOKENS"
+    }
+  ],
+  "usage_metadata": {
+    "prompt_token_count": 22,
+    "total_token_count": 1021
+  },
+  "model_version": "gemini-2.5-pro"
+}
+Retry still produced empty text
+Returning empty response: retry_attempted=False | retry_reason=empty_text | finish_reason=2
+Error extracting text from response: Cannot get the response text.
+Cannot get the Candidate text.
+Response candidate content has no parts (and thus no text). The candidate is likely blocked by the safety filters.
+Content:
+{
+  "role": "model"
+}
+Candidate:
+{
+  "content": {
+    "role": "model"
+  },
+  "finish_reason": "MAX_TOKENS"
+}
+Response:
+{
+  "candidates": [
+    {
+      "content": {
+        "role": "model"
+      },
+      "finish_reason": "MAX_TOKENS"
+    }
+  ],
+  "usage_metadata": {
+    "prompt_token_count": 107,
+    "total_token_count": 606
+  },
+  "model_version": "gemini-2.5-pro"
+}
+Error extracting text from response: Cannot get the response text.
+Cannot get the Candidate text.
+Response candidate content has no parts (and thus no text). The candidate is likely blocked by the safety filters.
+Content:
+{
+  "role": "model"
+}
+Candidate:
+{
+  "content": {
+    "role": "model"
+  },
+  "finish_reason": "MAX_TOKENS"
+}
+Response:
+{
+  "candidates": [
+    {
+      "content": {
+        "role": "model"
+      },
+      "finish_reason": "MAX_TOKENS"
+    }
+  ],
+  "usage_metadata": {
+    "prompt_token_count": 107,
+    "total_token_count": 1106
+  },
+  "model_version": "gemini-2.5-pro"
+}
+Retry still produced empty text
+Returning empty response: retry_attempted=False | retry_reason=empty_text | finish_reason=2
+
+############################################################
+# COMPREHENSIVE LONGEVITY NEWS TEST
+# Timestamp: 2025-08-31T21:50:40.961542
+# Prompt: today is 31st August, 2025 - tell me the top longevity news of August
+############################################################
+
+============================================================
+Testing: gpt-5_US_ungrounded_noALS
+Model: gpt-5, Country: US, Grounded: False, ALS: False
+------------------------------------------------------------
+✓ Success: True
+✓ Grounded Effective: False
+✓ Response Length: 2216 chars
+✓ Citations: 0
+
+============================================================
+Testing: gpt-5_US_ungrounded_ALS
+Model: gpt-5, Country: US, Grounded: False, ALS: True
+------------------------------------------------------------
+✓ Success: True
+✓ Grounded Effective: False
+✓ Response Length: 2437 chars
+✓ Citations: 0
+
+============================================================
+Testing: gpt-5_US_grounded_noALS
+Model: gpt-5, Country: US, Grounded: True, ALS: False
+------------------------------------------------------------
+✓ Success: True
+✓ Grounded Effective: False
+✓ Response Length: 2290 chars
+✓ Citations: 0
+
+============================================================
+Testing: gpt-5_US_grounded_ALS
+Model: gpt-5, Country: US, Grounded: True, ALS: True
+------------------------------------------------------------
+✓ Success: True
+✓ Grounded Effective: False
+✓ Response Length: 2112 chars
+✓ Citations: 0
+
+============================================================
+Testing: gpt-5_DE_ungrounded_noALS
+Model: gpt-5, Country: DE, Grounded: False, ALS: False
+------------------------------------------------------------
+✓ Success: True
+✓ Grounded Effective: False
+✓ Response Length: 2142 chars
+✓ Citations: 0
+
+============================================================
+Testing: gpt-5_DE_ungrounded_ALS
+Model: gpt-5, Country: DE, Grounded: False, ALS: True
+------------------------------------------------------------
+✓ Success: True
+✓ Grounded Effective: False
+✓ Response Length: 2469 chars
+✓ Citations: 0
+
+============================================================
+Testing: gpt-5_DE_grounded_noALS
+Model: gpt-5, Country: DE, Grounded: True, ALS: False
+------------------------------------------------------------
+✓ Success: True
+✓ Grounded Effective: False
+✓ Response Length: 2168 chars
+✓ Citations: 0
+
+============================================================
+Testing: gpt-5_DE_grounded_ALS
+Model: gpt-5, Country: DE, Grounded: True, ALS: True
+------------------------------------------------------------
+✓ Success: True
+✓ Grounded Effective: False
+✓ Response Length: 2401 chars
+✓ Citations: 0
+
+============================================================
+Testing: gemini-2.5-pro_US_ungrounded_noALS
+Model: gemini-2.5-pro, Country: US, Grounded: False, ALS: False
+------------------------------------------------------------
+✓ Success: False
+✓ Grounded Effective: False
+✓ Response Length: 0 chars
+✓ Citations: 0
+
+============================================================
+Testing: gemini-2.5-pro_US_ungrounded_ALS
+Model: gemini-2.5-pro, Country: US, Grounded: False, ALS: True
+------------------------------------------------------------
+✓ Success: False
+✓ Grounded Effective: False
+✓ Response Length: 0 chars
+✓ Citations: 0
+
+============================================================
+Testing: gemini-2.5-pro_US_grounded_noALS
+Model: gemini-2.5-pro, Country: US, Grounded: True, ALS: False
+------------------------------------------------------------
+✓ Success: True
+✓ Grounded Effective: True
+✓ Response Length: 5152 chars
+✓ Citations: 0
+
+============================================================
+Testing: gemini-2.5-pro_US_grounded_ALS
+Model: gemini-2.5-pro, Country: US, Grounded: True, ALS: True
+------------------------------------------------------------
+✓ Success: True
+✓ Grounded Effective: True
+✓ Response Length: 5122 chars
+✓ Citations: 0
+
+============================================================
+Testing: gemini-2.5-pro_DE_ungrounded_noALS
+Model: gemini-2.5-pro, Country: DE, Grounded: False, ALS: False
+------------------------------------------------------------
+✓ Success: False
+✓ Grounded Effective: False
+✓ Response Length: 0 chars
+✓ Citations: 0
+
+============================================================
+Testing: gemini-2.5-pro_DE_ungrounded_ALS
+Model: gemini-2.5-pro, Country: DE, Grounded: False, ALS: True
+------------------------------------------------------------
+✓ Success: False
+✓ Grounded Effective: False
+✓ Response Length: 0 chars
+✓ Citations: 0
+
+============================================================
+Testing: gemini-2.5-pro_DE_grounded_noALS
+Model: gemini-2.5-pro, Country: DE, Grounded: True, ALS: False
+------------------------------------------------------------
+✓ Success: True
+✓ Grounded Effective: True
+✓ Response Length: 4438 chars
+✓ Citations: 0
+
+============================================================
+Testing: gemini-2.5-pro_DE_grounded_ALS
+Model: gemini-2.5-pro, Country: DE, Grounded: True, ALS: True
+------------------------------------------------------------
+✓ Success: True
+✓ Grounded Effective: True
+✓ Response Length: 4909 chars
+✓ Citations: 0
+
+############################################################
+# SUMMARY REPORT
+############################################################
+
+gpt-5:
+  Success Rate: 8/8
+  Grounding Effective: 0/4
+
+gemini-2.5-pro:
+  Success Rate: 4/8
+  Grounding Effective: 4/4
+
+✓ Detailed results saved to: longevity_test_results_20250831_215426.json
+
+============================================================
+ALS EFFECTIVENESS CHECK:
+
+gpt-5:
+  DE+ALS has .de domains: False
+  DE no-ALS has .de domains: False
+  ✗ No .de domains found - ALS may not be effective
+
+gemini-2.5-pro:
+  DE+ALS has .de domains: False
+  DE no-ALS has .de domains: False
+  ✗ No .de domains found - ALS may not be effective

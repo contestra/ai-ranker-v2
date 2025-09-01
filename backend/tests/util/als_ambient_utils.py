@@ -41,17 +41,21 @@ def check_assistant_location_mention(response: str) -> bool:
             return True
     return False
 
-def extract_tld_counts(citations: List[str]) -> Dict[str, int]:
+def extract_tld_counts(citations: List) -> Dict[str, int]:
     """
     Parse citation URLs and count TLD buckets.
     Enhanced to handle citations that may be dicts with source_domain field.
     """
     tld_counter = Counter()
+    redirector_counter = Counter()  # Track redirector domains separately
     
     for item in citations:
         # Handle both string URLs and dict citations
         if isinstance(item, dict):
             # Prefer source_domain if available (actual domain from Vertex)
+            domain = None
+            is_redirect = False
+            
             if 'source_domain' in item and item['source_domain']:
                 domain = item['source_domain'].lower()
             elif 'url' in item:
@@ -61,6 +65,13 @@ def extract_tld_counts(citations: List[str]) -> Dict[str, int]:
                 try:
                     parsed = urlparse(url)
                     domain = parsed.netloc.lower()
+                    # Check if it's a redirector
+                    if 'vertexaisearch.cloud.google.com' in domain:
+                        is_redirect = True
+                        # Try to get true domain from raw data
+                        if 'raw' in item and isinstance(item['raw'], dict):
+                            if 'redirect' in item['raw'] and item['raw']['redirect']:
+                                is_redirect = True
                 except:
                     continue
             else:
@@ -72,6 +83,7 @@ def extract_tld_counts(citations: List[str]) -> Dict[str, int]:
             try:
                 parsed = urlparse(url)
                 domain = parsed.netloc.lower()
+                is_redirect = 'vertexaisearch.cloud.google.com' in domain
             except:
                 continue
         else:
@@ -82,34 +94,83 @@ def extract_tld_counts(citations: List[str]) -> Dict[str, int]:
             parts = domain.split('.')
             if len(parts) >= 2:
                 # Handle cases like .co.uk
-                if len(parts) >= 3 and parts[-2] in ['co', 'ac', 'gov', 'edu', 'org']:
+                if len(parts) >= 3 and parts[-2] in ['co', 'ac', 'gov', 'edu', 'org', 'net', 'com']:
                     tld = f".{parts[-2]}.{parts[-1]}"
                 else:
                     tld = f".{parts[-1]}"
                 
-                # Normalize common TLDs
-                if tld in ['.ch', '.de', '.fr', '.it', '.uk', '.eu', '.com', '.org', '.gov', '.edu']:
-                    tld_counter[tld] += 1
+                # Count in appropriate bucket
+                if is_redirect:
+                    redirector_counter[tld] += 1
                 else:
-                    tld_counter['other'] += 1
+                    # Normalize common TLDs
+                    if tld in ['.ch', '.de', '.fr', '.it', '.uk', '.eu', '.com', '.org', '.gov', '.edu', '.at', '.nl', '.be']:
+                        tld_counter[tld] += 1
+                    else:
+                        tld_counter['other'] += 1
     
-    return dict(tld_counter)
+    # Return both counters
+    result = dict(tld_counter)
+    if redirector_counter:
+        result['_redirectors'] = dict(redirector_counter)
+    return result
 
-def calculate_domain_diversity(citations: List[str]) -> int:
+def calculate_domain_diversity(citations: List) -> int:
     """
-    Count unique domains in citations
+    Count unique domains in citations.
+    Enhanced to prefer source_domain field.
     """
     domains = set()
-    for url in citations:
-        if not url:
-            continue
-        try:
-            parsed = urlparse(url)
-            if parsed.netloc:
-                domains.add(parsed.netloc.lower())
-        except:
-            continue
+    for item in citations:
+        domain = None
+        
+        if isinstance(item, dict):
+            # Prefer source_domain if available
+            if 'source_domain' in item and item['source_domain']:
+                domain = item['source_domain'].lower()
+            elif 'url' in item and item['url']:
+                try:
+                    parsed = urlparse(item['url'])
+                    domain = parsed.netloc.lower() if parsed.netloc else None
+                except:
+                    continue
+        elif isinstance(item, str) and item:
+            try:
+                parsed = urlparse(item)
+                domain = parsed.netloc.lower() if parsed.netloc else None
+            except:
+                continue
+        
+        if domain:
+            domains.add(domain)
+    
     return len(domains)
+
+def get_registrable_domain(url: str) -> str:
+    """
+    Extract registrable domain from URL.
+    Simple implementation without public suffix list.
+    """
+    try:
+        parsed = urlparse(url)
+        domain = parsed.netloc.lower()
+        if not domain:
+            return ""
+        
+        # Remove port if present
+        domain = domain.split(':')[0]
+        
+        # Simple heuristic for registrable domain
+        parts = domain.split('.')
+        if len(parts) >= 2:
+            # Handle common second-level domains
+            if len(parts) >= 3 and parts[-2] in ['co', 'ac', 'gov', 'edu', 'org', 'net', 'com']:
+                return '.'.join(parts[-3:])
+            return '.'.join(parts[-2:])
+        return domain
+    except:
+        return ""
+
 
 def guess_language(response: str, tld_counts: Dict[str, int]) -> str:
     """

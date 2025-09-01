@@ -269,6 +269,7 @@ class LLMTelemetry(Base):
     vendor = Column(String(50), nullable=False)  # openai, vertex
     model = Column(String(100), nullable=False)  # gpt-4o, gemini-1.5-pro
     grounded = Column(Boolean, nullable=False, default=False)
+    grounded_effective = Column(Boolean, nullable=False, default=False)  # Whether grounding actually happened
     json_mode = Column(Boolean, nullable=False, default=False)
     latency_ms = Column(Integer)
     prompt_tokens = Column(Integer)
@@ -278,6 +279,7 @@ class LLMTelemetry(Base):
     error_type = Column(String(100))
     template_id = Column(UUID(as_uuid=True))  # Optional link to template
     run_id = Column(String(255))  # Optional run identifier
+    meta = Column(JSON)  # Rich metadata: ALS, grounding, citations, feature flags
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     
     # Indexes for analysis

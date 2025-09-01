@@ -1,0 +1,425 @@
+{
+  "timestamp": "2025-09-01T15:11:02.698720",
+  "results": [
+    {
+      "config_name": "openai_gpt_5_US_grounded_ALS_AUTO",
+      "config": {
+        "vendor": "openai",
+        "model": "gpt-5",
+        "country": "US",
+        "grounded": true,
+        "als": true,
+        "mode": "AUTO"
+      },
+      "latency_ms": 0.0016689300537109375,
+      "success": false,
+      "error": "'UnifiedLLMAdapter' object has no attribute 'execute'",
+      "response_length": 0,
+      "citations": {
+        "total": 0,
+        "anchored": 0,
+        "unlinked": 0
+      },
+      "grounding": {
+        "requested": true,
+        "effective": false,
+        "mode": "AUTO",
+        "why_not_grounded": null,
+        "response_api": null
+      },
+      "model": {
+        "requested": "gpt-5",
+        "adjusted": false,
+        "original": null
+      },
+      "tool_calls": 0,
+      "feature_flags": {},
+      "runtime_flags": {}
+    },
+    {
+      "config_name": "openai_gpt_5_US_grounded_noALS_AUTO",
+      "config": {
+        "vendor": "openai",
+        "model": "gpt-5",
+        "country": "US",
+        "grounded": true,
+        "als": false,
+        "mode": "AUTO"
+      },
+      "latency_ms": 0.003337860107421875,
+      "success": false,
+      "error": "'UnifiedLLMAdapter' object has no attribute 'execute'",
+      "response_length": 0,
+      "citations": {
+        "total": 0,
+        "anchored": 0,
+        "unlinked": 0
+      },
+      "grounding": {
+        "requested": true,
+        "effective": false,
+        "mode": "AUTO",
+        "why_not_grounded": null,
+        "response_api": null
+      },
+      "model": {
+        "requested": "gpt-5",
+        "adjusted": false,
+        "original": null
+      },
+      "tool_calls": 0,
+      "feature_flags": {},
+      "runtime_flags": {}
+    },
+    {
+      "config_name": "openai_gpt_5_DE_grounded_ALS_AUTO",
+      "config": {
+        "vendor": "openai",
+        "model": "gpt-5",
+        "country": "DE",
+        "grounded": true,
+        "als": true,
+        "mode": "AUTO"
+      },
+      "latency_ms": 0.0035762786865234375,
+      "success": false,
+      "error": "'UnifiedLLMAdapter' object has no attribute 'execute'",
+      "response_length": 0,
+      "citations": {
+        "total": 0,
+        "anchored": 0,
+        "unlinked": 0
+      },
+      "grounding": {
+        "requested": true,
+        "effective": false,
+        "mode": "AUTO",
+        "why_not_grounded": null,
+        "response_api": null
+      },
+      "model": {
+        "requested": "gpt-5",
+        "adjusted": false,
+        "original": null
+      },
+      "tool_calls": 0,
+      "feature_flags": {},
+      "runtime_flags": {}
+    },
+    {
+      "config_name": "openai_gpt_5_US_grounded_ALS_REQUIRED",
+      "config": {
+        "vendor": "openai",
+        "model": "gpt-5",
+        "country": "US",
+        "grounded": true,
+        "als": true,
+        "mode": "REQUIRED"
+      },
+      "latency_ms": 0.0045299530029296875,
+      "success": false,
+      "error": "'UnifiedLLMAdapter' object has no attribute 'execute'",
+      "response_length": 0,
+      "citations": {
+        "total": 0,
+        "anchored": 0,
+        "unlinked": 0
+      },
+      "grounding": {
+        "requested": true,
+        "effective": false,
+        "mode": "REQUIRED",
+        "why_not_grounded": null,
+        "response_api": null
+      },
+      "model": {
+        "requested": "gpt-5",
+        "adjusted": false,
+        "original": null
+      },
+      "tool_calls": 0,
+      "feature_flags": {},
+      "runtime_flags": {}
+    },
+    {
+      "config_name": "openai_gpt_5_chat_latest_US_ungrounded_ALS",
+      "config": {
+        "vendor": "openai",
+        "model": "gpt-5-chat-latest",
+        "country": "US",
+        "grounded": false,
+        "als": true,
+        "mode": null
+      },
+      "latency_ms": 0.007152557373046875,
+      "success": false,
+      "error": "'UnifiedLLMAdapter' object has no attribute 'execute'",
+      "response_length": 0,
+      "citations": {
+        "total": 0,
+        "anchored": 0,
+        "unlinked": 0
+      },
+      "grounding": {
+        "requested": false,
+        "effective": false,
+        "mode": null,
+        "why_not_grounded": null,
+        "response_api": null
+      },
+      "model": {
+        "requested": "gpt-5-chat-latest",
+        "adjusted": false,
+        "original": null
+      },
+      "tool_calls": 0,
+      "feature_flags": {},
+      "runtime_flags": {}
+    },
+    {
+      "config_name": "openai_gpt_5_chat_latest_US_ungrounded_noALS",
+      "config": {
+        "vendor": "openai",
+        "model": "gpt-5-chat-latest",
+        "country": "US",
+        "grounded": false,
+        "als": false,
+        "mode": null
+      },
+      "latency_ms": 0.00476837158203125,
+      "success": false,
+      "error": "'UnifiedLLMAdapter' object has no attribute 'execute'",
+      "response_length": 0,
+      "citations": {
+        "total": 0,
+        "anchored": 0,
+        "unlinked": 0
+      },
+      "grounding": {
+        "requested": false,
+        "effective": false,
+        "mode": null,
+        "why_not_grounded": null,
+        "response_api": null
+      },
+      "model": {
+        "requested": "gpt-5-chat-latest",
+        "adjusted": false,
+        "original": null
+      },
+      "tool_calls": 0,
+      "feature_flags": {},
+      "runtime_flags": {}
+    },
+    {
+      "config_name": "vertex_gemini_2.5_pro_US_grounded_ALS_AUTO",
+      "config": {
+        "vendor": "vertex",
+        "model": "gemini-2.5-pro",
+        "country": "US",
+        "grounded": true,
+        "als": true,
+        "mode": "AUTO"
+      },
+      "latency_ms": 0.0030994415283203125,
+      "success": false,
+      "error": "'UnifiedLLMAdapter' object has no attribute 'execute'",
+      "response_length": 0,
+      "citations": {
+        "total": 0,
+        "anchored": 0,
+        "unlinked": 0
+      },
+      "grounding": {
+        "requested": true,
+        "effective": false,
+        "mode": "AUTO",
+        "why_not_grounded": null,
+        "response_api": null
+      },
+      "model": {
+        "requested": "gemini-2.5-pro",
+        "adjusted": false,
+        "original": null
+      },
+      "tool_calls": 0,
+      "feature_flags": {},
+      "runtime_flags": {}
+    },
+    {
+      "config_name": "vertex_gemini_2.5_pro_US_grounded_noALS_AUTO",
+      "config": {
+        "vendor": "vertex",
+        "model": "gemini-2.5-pro",
+        "country": "US",
+        "grounded": true,
+        "als": false,
+        "mode": "AUTO"
+      },
+      "latency_ms": 0.003337860107421875,
+      "success": false,
+      "error": "'UnifiedLLMAdapter' object has no attribute 'execute'",
+      "response_length": 0,
+      "citations": {
+        "total": 0,
+        "anchored": 0,
+        "unlinked": 0
+      },
+      "grounding": {
+        "requested": true,
+        "effective": false,
+        "mode": "AUTO",
+        "why_not_grounded": null,
+        "response_api": null
+      },
+      "model": {
+        "requested": "gemini-2.5-pro",
+        "adjusted": false,
+        "original": null
+      },
+      "tool_calls": 0,
+      "feature_flags": {},
+      "runtime_flags": {}
+    },
+    {
+      "config_name": "vertex_gemini_2.5_pro_DE_grounded_ALS_AUTO",
+      "config": {
+        "vendor": "vertex",
+        "model": "gemini-2.5-pro",
+        "country": "DE",
+        "grounded": true,
+        "als": true,
+        "mode": "AUTO"
+      },
+      "latency_ms": 0.0057220458984375,
+      "success": false,
+      "error": "'UnifiedLLMAdapter' object has no attribute 'execute'",
+      "response_length": 0,
+      "citations": {
+        "total": 0,
+        "anchored": 0,
+        "unlinked": 0
+      },
+      "grounding": {
+        "requested": true,
+        "effective": false,
+        "mode": "AUTO",
+        "why_not_grounded": null,
+        "response_api": null
+      },
+      "model": {
+        "requested": "gemini-2.5-pro",
+        "adjusted": false,
+        "original": null
+      },
+      "tool_calls": 0,
+      "feature_flags": {},
+      "runtime_flags": {}
+    },
+    {
+      "config_name": "vertex_gemini_2.5_pro_US_grounded_ALS_REQUIRED",
+      "config": {
+        "vendor": "vertex",
+        "model": "gemini-2.5-pro",
+        "country": "US",
+        "grounded": true,
+        "als": true,
+        "mode": "REQUIRED"
+      },
+      "latency_ms": 0.0035762786865234375,
+      "success": false,
+      "error": "'UnifiedLLMAdapter' object has no attribute 'execute'",
+      "response_length": 0,
+      "citations": {
+        "total": 0,
+        "anchored": 0,
+        "unlinked": 0
+      },
+      "grounding": {
+        "requested": true,
+        "effective": false,
+        "mode": "REQUIRED",
+        "why_not_grounded": null,
+        "response_api": null
+      },
+      "model": {
+        "requested": "gemini-2.5-pro",
+        "adjusted": false,
+        "original": null
+      },
+      "tool_calls": 0,
+      "feature_flags": {},
+      "runtime_flags": {}
+    },
+    {
+      "config_name": "vertex_gemini_2.5_pro_US_ungrounded_ALS",
+      "config": {
+        "vendor": "vertex",
+        "model": "gemini-2.5-pro",
+        "country": "US",
+        "grounded": false,
+        "als": true,
+        "mode": null
+      },
+      "latency_ms": 0.0035762786865234375,
+      "success": false,
+      "error": "'UnifiedLLMAdapter' object has no attribute 'execute'",
+      "response_length": 0,
+      "citations": {
+        "total": 0,
+        "anchored": 0,
+        "unlinked": 0
+      },
+      "grounding": {
+        "requested": false,
+        "effective": false,
+        "mode": null,
+        "why_not_grounded": null,
+        "response_api": null
+      },
+      "model": {
+        "requested": "gemini-2.5-pro",
+        "adjusted": false,
+        "original": null
+      },
+      "tool_calls": 0,
+      "feature_flags": {},
+      "runtime_flags": {}
+    },
+    {
+      "config_name": "vertex_gemini_2.5_pro_US_ungrounded_noALS",
+      "config": {
+        "vendor": "vertex",
+        "model": "gemini-2.5-pro",
+        "country": "US",
+        "grounded": false,
+        "als": false,
+        "mode": null
+      },
+      "latency_ms": 0.0040531158447265625,
+      "success": false,
+      "error": "'UnifiedLLMAdapter' object has no attribute 'execute'",
+      "response_length": 0,
+      "citations": {
+        "total": 0,
+        "anchored": 0,
+        "unlinked": 0
+      },
+      "grounding": {
+        "requested": false,
+        "effective": false,
+        "mode": null,
+        "why_not_grounded": null,
+        "response_api": null
+      },
+      "model": {
+        "requested": "gemini-2.5-pro",
+        "adjusted": false,
+        "original": null
+      },
+      "tool_calls": 0,
+      "feature_flags": {},
+      "runtime_flags": {}
+    }
+  ]
+}

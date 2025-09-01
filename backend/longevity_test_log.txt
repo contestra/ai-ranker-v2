@@ -1,0 +1,129 @@
+
+############################################################
+# COMPREHENSIVE LONGEVITY NEWS TEST
+# Timestamp: 2025-08-31T21:42:55.187663
+# Prompt: today is 31st August, 2025 - tell me the top longevity news of August
+############################################################
+
+============================================================
+Testing: gpt-5_US_ungrounded_noALS
+Model: gpt-5, Country: US, Grounded: False, ALS: False
+------------------------------------------------------------
+✗ Error: LLMRequest.__init__() got an unexpected keyword argument 'grounding_mode'
+
+============================================================
+Testing: gpt-5_US_ungrounded_ALS
+Model: gpt-5, Country: US, Grounded: False, ALS: True
+------------------------------------------------------------
+✗ Error: LLMRequest.__init__() got an unexpected keyword argument 'grounding_mode'
+
+============================================================
+Testing: gpt-5_US_grounded_noALS
+Model: gpt-5, Country: US, Grounded: True, ALS: False
+------------------------------------------------------------
+✗ Error: LLMRequest.__init__() got an unexpected keyword argument 'grounding_mode'
+
+============================================================
+Testing: gpt-5_US_grounded_ALS
+Model: gpt-5, Country: US, Grounded: True, ALS: True
+------------------------------------------------------------
+✗ Error: LLMRequest.__init__() got an unexpected keyword argument 'grounding_mode'
+
+============================================================
+Testing: gpt-5_DE_ungrounded_noALS
+Model: gpt-5, Country: DE, Grounded: False, ALS: False
+------------------------------------------------------------
+✗ Error: LLMRequest.__init__() got an unexpected keyword argument 'grounding_mode'
+
+============================================================
+Testing: gpt-5_DE_ungrounded_ALS
+Model: gpt-5, Country: DE, Grounded: False, ALS: True
+------------------------------------------------------------
+✗ Error: LLMRequest.__init__() got an unexpected keyword argument 'grounding_mode'
+
+============================================================
+Testing: gpt-5_DE_grounded_noALS
+Model: gpt-5, Country: DE, Grounded: True, ALS: False
+------------------------------------------------------------
+✗ Error: LLMRequest.__init__() got an unexpected keyword argument 'grounding_mode'
+
+============================================================
+Testing: gpt-5_DE_grounded_ALS
+Model: gpt-5, Country: DE, Grounded: True, ALS: True
+------------------------------------------------------------
+✗ Error: LLMRequest.__init__() got an unexpected keyword argument 'grounding_mode'
+
+============================================================
+Testing: gemini-2.5-pro_US_ungrounded_noALS
+Model: gemini-2.5-pro, Country: US, Grounded: False, ALS: False
+------------------------------------------------------------
+✗ Error: LLMRequest.__init__() got an unexpected keyword argument 'grounding_mode'
+
+============================================================
+Testing: gemini-2.5-pro_US_ungrounded_ALS
+Model: gemini-2.5-pro, Country: US, Grounded: False, ALS: True
+------------------------------------------------------------
+✗ Error: LLMRequest.__init__() got an unexpected keyword argument 'grounding_mode'
+
+============================================================
+Testing: gemini-2.5-pro_US_grounded_noALS
+Model: gemini-2.5-pro, Country: US, Grounded: True, ALS: False
+------------------------------------------------------------
+✗ Error: LLMRequest.__init__() got an unexpected keyword argument 'grounding_mode'
+
+============================================================
+Testing: gemini-2.5-pro_US_grounded_ALS
+Model: gemini-2.5-pro, Country: US, Grounded: True, ALS: True
+------------------------------------------------------------
+✗ Error: LLMRequest.__init__() got an unexpected keyword argument 'grounding_mode'
+
+============================================================
+Testing: gemini-2.5-pro_DE_ungrounded_noALS
+Model: gemini-2.5-pro, Country: DE, Grounded: False, ALS: False
+------------------------------------------------------------
+✗ Error: LLMRequest.__init__() got an unexpected keyword argument 'grounding_mode'
+
+============================================================
+Testing: gemini-2.5-pro_DE_ungrounded_ALS
+Model: gemini-2.5-pro, Country: DE, Grounded: False, ALS: True
+------------------------------------------------------------
+✗ Error: LLMRequest.__init__() got an unexpected keyword argument 'grounding_mode'
+
+============================================================
+Testing: gemini-2.5-pro_DE_grounded_noALS
+Model: gemini-2.5-pro, Country: DE, Grounded: True, ALS: False
+------------------------------------------------------------
+✗ Error: LLMRequest.__init__() got an unexpected keyword argument 'grounding_mode'
+
+============================================================
+Testing: gemini-2.5-pro_DE_grounded_ALS
+Model: gemini-2.5-pro, Country: DE, Grounded: True, ALS: True
+------------------------------------------------------------
+✗ Error: LLMRequest.__init__() got an unexpected keyword argument 'grounding_mode'
+
+############################################################
+# SUMMARY REPORT
+############################################################
+
+gpt-5:
+  Success Rate: 0/8
+  Grounding Effective: 0/4
+
+gemini-2.5-pro:
+  Success Rate: 0/8
+  Grounding Effective: 0/4
+
+✓ Detailed results saved to: longevity_test_results_20250831_214311.json
+
+============================================================
+ALS EFFECTIVENESS CHECK:
+
+gpt-5:
+  DE+ALS has .de domains: False
+  DE no-ALS has .de domains: False
+  ✗ No .de domains found - ALS may not be effective
+
+gemini-2.5-pro:
+  DE+ALS has .de domains: False
+  DE no-ALS has .de domains: False
+  ✗ No .de domains found - ALS may not be effective

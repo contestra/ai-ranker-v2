@@ -1,0 +1,193 @@
+Adapter failed for vendor=openai: OPENAI_API_KEY required - set in backend/.env
+Adapter failed for vendor=openai: OPENAI_API_KEY required - set in backend/.env
+Adapter failed for vendor=openai: OPENAI_API_KEY required - set in backend/.env
+Adapter failed for vendor=openai: OPENAI_API_KEY required - set in backend/.env
+Adapter failed for vendor=openai: OPENAI_API_KEY required - set in backend/.env
+Adapter failed for vendor=openai: OPENAI_API_KEY required - set in backend/.env
+Adapter failed for vendor=openai: OPENAI_API_KEY required - set in backend/.env
+Adapter failed for vendor=openai: OPENAI_API_KEY required - set in backend/.env
+Adapter failed for vendor=vertex: GOOGLE_CLOUD_PROJECT or VERTEX_PROJECT_ID required - set in backend/.env
+Adapter failed for vendor=vertex: GOOGLE_CLOUD_PROJECT or VERTEX_PROJECT_ID required - set in backend/.env
+Adapter failed for vendor=vertex: GOOGLE_CLOUD_PROJECT or VERTEX_PROJECT_ID required - set in backend/.env
+Adapter failed for vendor=vertex: GOOGLE_CLOUD_PROJECT or VERTEX_PROJECT_ID required - set in backend/.env
+Adapter failed for vendor=vertex: GOOGLE_CLOUD_PROJECT or VERTEX_PROJECT_ID required - set in backend/.env
+Adapter failed for vendor=vertex: GOOGLE_CLOUD_PROJECT or VERTEX_PROJECT_ID required - set in backend/.env
+Adapter failed for vendor=vertex: GOOGLE_CLOUD_PROJECT or VERTEX_PROJECT_ID required - set in backend/.env
+Adapter failed for vendor=vertex: GOOGLE_CLOUD_PROJECT or VERTEX_PROJECT_ID required - set in backend/.env
+
+############################################################
+# COMPREHENSIVE LONGEVITY NEWS TEST
+# Timestamp: 2025-08-31T21:48:37.356728
+# Prompt: today is 31st August, 2025 - tell me the top longevity news of August
+############################################################
+
+============================================================
+Testing: gpt-5_US_ungrounded_noALS
+Model: gpt-5, Country: US, Grounded: False, ALS: False
+------------------------------------------------------------
+✓ Success: False
+✓ Grounded Effective: False
+✓ Response Length: 0 chars
+✓ Citations: 0
+
+============================================================
+Testing: gpt-5_US_ungrounded_ALS
+Model: gpt-5, Country: US, Grounded: False, ALS: True
+------------------------------------------------------------
+✓ Success: False
+✓ Grounded Effective: False
+✓ Response Length: 0 chars
+✓ Citations: 0
+
+============================================================
+Testing: gpt-5_US_grounded_noALS
+Model: gpt-5, Country: US, Grounded: True, ALS: False
+------------------------------------------------------------
+✓ Success: False
+✓ Grounded Effective: False
+✓ Response Length: 0 chars
+✓ Citations: 0
+
+============================================================
+Testing: gpt-5_US_grounded_ALS
+Model: gpt-5, Country: US, Grounded: True, ALS: True
+------------------------------------------------------------
+✓ Success: False
+✓ Grounded Effective: False
+✓ Response Length: 0 chars
+✓ Citations: 0
+
+============================================================
+Testing: gpt-5_DE_ungrounded_noALS
+Model: gpt-5, Country: DE, Grounded: False, ALS: False
+------------------------------------------------------------
+✓ Success: False
+✓ Grounded Effective: False
+✓ Response Length: 0 chars
+✓ Citations: 0
+
+============================================================
+Testing: gpt-5_DE_ungrounded_ALS
+Model: gpt-5, Country: DE, Grounded: False, ALS: True
+------------------------------------------------------------
+✓ Success: False
+✓ Grounded Effective: False
+✓ Response Length: 0 chars
+✓ Citations: 0
+
+============================================================
+Testing: gpt-5_DE_grounded_noALS
+Model: gpt-5, Country: DE, Grounded: True, ALS: False
+------------------------------------------------------------
+✓ Success: False
+✓ Grounded Effective: False
+✓ Response Length: 0 chars
+✓ Citations: 0
+
+============================================================
+Testing: gpt-5_DE_grounded_ALS
+Model: gpt-5, Country: DE, Grounded: True, ALS: True
+------------------------------------------------------------
+✓ Success: False
+✓ Grounded Effective: False
+✓ Response Length: 0 chars
+✓ Citations: 0
+
+============================================================
+Testing: gemini-2.5-pro_US_ungrounded_noALS
+Model: gemini-2.5-pro, Country: US, Grounded: False, ALS: False
+------------------------------------------------------------
+✓ Success: False
+✓ Grounded Effective: False
+✓ Response Length: 0 chars
+✓ Citations: 0
+
+============================================================
+Testing: gemini-2.5-pro_US_ungrounded_ALS
+Model: gemini-2.5-pro, Country: US, Grounded: False, ALS: True
+------------------------------------------------------------
+✓ Success: False
+✓ Grounded Effective: False
+✓ Response Length: 0 chars
+✓ Citations: 0
+
+============================================================
+Testing: gemini-2.5-pro_US_grounded_noALS
+Model: gemini-2.5-pro, Country: US, Grounded: True, ALS: False
+------------------------------------------------------------
+✓ Success: False
+✓ Grounded Effective: False
+✓ Response Length: 0 chars
+✓ Citations: 0
+
+============================================================
+Testing: gemini-2.5-pro_US_grounded_ALS
+Model: gemini-2.5-pro, Country: US, Grounded: True, ALS: True
+------------------------------------------------------------
+✓ Success: False
+✓ Grounded Effective: False
+✓ Response Length: 0 chars
+✓ Citations: 0
+
+============================================================
+Testing: gemini-2.5-pro_DE_ungrounded_noALS
+Model: gemini-2.5-pro, Country: DE, Grounded: False, ALS: False
+------------------------------------------------------------
+✓ Success: False
+✓ Grounded Effective: False
+✓ Response Length: 0 chars
+✓ Citations: 0
+
+============================================================
+Testing: gemini-2.5-pro_DE_ungrounded_ALS
+Model: gemini-2.5-pro, Country: DE, Grounded: False, ALS: True
+------------------------------------------------------------
+✓ Success: False
+✓ Grounded Effective: False
+✓ Response Length: 0 chars
+✓ Citations: 0
+
+============================================================
+Testing: gemini-2.5-pro_DE_grounded_noALS
+Model: gemini-2.5-pro, Country: DE, Grounded: True, ALS: False
+------------------------------------------------------------
+✓ Success: False
+✓ Grounded Effective: False
+✓ Response Length: 0 chars
+✓ Citations: 0
+
+============================================================
+Testing: gemini-2.5-pro_DE_grounded_ALS
+Model: gemini-2.5-pro, Country: DE, Grounded: True, ALS: True
+------------------------------------------------------------
+✓ Success: False
+✓ Grounded Effective: False
+✓ Response Length: 0 chars
+✓ Citations: 0
+
+############################################################
+# SUMMARY REPORT
+############################################################
+
+gpt-5:
+  Success Rate: 0/8
+  Grounding Effective: 0/4
+
+gemini-2.5-pro:
+  Success Rate: 0/8
+  Grounding Effective: 0/4
+
+✓ Detailed results saved to: longevity_test_results_20250831_214854.json
+
+============================================================
+ALS EFFECTIVENESS CHECK:
+
+gpt-5:
+  DE+ALS has .de domains: False
+  DE no-ALS has .de domains: False
+  ✗ No .de domains found - ALS may not be effective
+
+gemini-2.5-pro:
+  DE+ALS has .de domains: False
+  DE no-ALS has .de domains: False
+  ✗ No .de domains found - ALS may not be effective

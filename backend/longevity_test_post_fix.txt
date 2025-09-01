@@ -1,0 +1,470 @@
+[LLM_TIMEOUT] {"vendor": "openai", "model": "gpt-5-chat-latest", "vantage_policy": "NONE", "proxy_mode": "disabled", "country": "none", "grounded": true, "max_tokens": 500, "timeouts_s": {"connect": 2.0, "read": 120.0, "total": 122.0}, "error_type": "error", "error_msg": "Error code: 400 - {'error': {'message': \"Hosted tool 'web_search_preview' is not supported with gpt-5-chat-latest.\", 'type': 'invalid_request_error', 'param': 'tools', 'code': None}}"}
+[TOOL_FALLBACK] Both tool types unsupported for gpt-5-chat-latest
+Grounding not supported for gpt-5-chat-latest, proceeding without
+Adapter failed for vendor=openai: GROUNDING_NOT_SUPPORTED: Model gpt-5-chat-latest does not support any web_search variant (REQUIRED mode)
+Increasing max_tokens from 500 to 1500 for Vertex ungrounded (avoids empty responses)
+Error extracting text from response: Cannot get the response text.
+Cannot get the Candidate text.
+Response candidate content has no parts (and thus no text). The candidate is likely blocked by the safety filters.
+Content:
+{
+  "role": "model"
+}
+Candidate:
+{
+  "content": {
+    "role": "model"
+  },
+  "finish_reason": "MAX_TOKENS"
+}
+Response:
+{
+  "candidates": [
+    {
+      "content": {
+        "role": "model"
+      },
+      "finish_reason": "MAX_TOKENS"
+    }
+  ],
+  "usage_metadata": {
+    "prompt_token_count": 22,
+    "total_token_count": 1521
+  },
+  "model_version": "gemini-2.5-pro"
+}
+Error extracting text from response: Cannot get the response text.
+Cannot get the Candidate text.
+Response candidate content has no parts (and thus no text). The candidate is likely blocked by the safety filters.
+Content:
+{
+  "role": "model"
+}
+Candidate:
+{
+  "content": {
+    "role": "model"
+  },
+  "finish_reason": "MAX_TOKENS"
+}
+Response:
+{
+  "candidates": [
+    {
+      "content": {
+        "role": "model"
+      },
+      "finish_reason": "MAX_TOKENS"
+    }
+  ],
+  "usage_metadata": {
+    "prompt_token_count": 22,
+    "total_token_count": 1021
+  },
+  "model_version": "gemini-2.5-pro"
+}
+Retry still produced empty text
+Returning empty response: retry_attempted=False | retry_reason=empty_text | finish_reason=2
+Increasing max_tokens from 500 to 1500 for Vertex ungrounded (avoids empty responses)
+Error extracting text from response: Cannot get the response text.
+Cannot get the Candidate text.
+Response candidate content has no parts (and thus no text). The candidate is likely blocked by the safety filters.
+Content:
+{
+  "role": "model"
+}
+Candidate:
+{
+  "content": {
+    "role": "model"
+  },
+  "finish_reason": "MAX_TOKENS"
+}
+Response:
+{
+  "candidates": [
+    {
+      "content": {
+        "role": "model"
+      },
+      "finish_reason": "MAX_TOKENS"
+    }
+  ],
+  "usage_metadata": {
+    "prompt_token_count": 106,
+    "total_token_count": 1605
+  },
+  "model_version": "gemini-2.5-pro"
+}
+Error extracting text from response: Cannot get the response text.
+Cannot get the Candidate text.
+Response candidate content has no parts (and thus no text). The candidate is likely blocked by the safety filters.
+Content:
+{
+  "role": "model"
+}
+Candidate:
+{
+  "content": {
+    "role": "model"
+  },
+  "finish_reason": "MAX_TOKENS"
+}
+Response:
+{
+  "candidates": [
+    {
+      "content": {
+        "role": "model"
+      },
+      "finish_reason": "MAX_TOKENS"
+    }
+  ],
+  "usage_metadata": {
+    "prompt_token_count": 106,
+    "total_token_count": 1105
+  },
+  "model_version": "gemini-2.5-pro"
+}
+Retry still produced empty text
+Returning empty response: retry_attempted=False | retry_reason=empty_text | finish_reason=2
+[GROUNDING_REQUIRED] REQUIRED mode failed: vendor=vertex, model=publishers/google/models/gemini-2.5-pro, reason=Grounding tools invoked but no citations extracted
+Increasing max_tokens from 500 to 1500 for Vertex ungrounded (avoids empty responses)
+Error extracting text from response: Cannot get the response text.
+Cannot get the Candidate text.
+Response candidate content has no parts (and thus no text). The candidate is likely blocked by the safety filters.
+Content:
+{
+  "role": "model"
+}
+Candidate:
+{
+  "content": {
+    "role": "model"
+  },
+  "finish_reason": "MAX_TOKENS"
+}
+Response:
+{
+  "candidates": [
+    {
+      "content": {
+        "role": "model"
+      },
+      "finish_reason": "MAX_TOKENS"
+    }
+  ],
+  "usage_metadata": {
+    "prompt_token_count": 22,
+    "total_token_count": 1521
+  },
+  "model_version": "gemini-2.5-pro"
+}
+Error extracting text from response: Cannot get the response text.
+Cannot get the Candidate text.
+Response candidate content has no parts (and thus no text). The candidate is likely blocked by the safety filters.
+Content:
+{
+  "role": "model"
+}
+Candidate:
+{
+  "content": {
+    "role": "model"
+  },
+  "finish_reason": "MAX_TOKENS"
+}
+Response:
+{
+  "candidates": [
+    {
+      "content": {
+        "role": "model"
+      },
+      "finish_reason": "MAX_TOKENS"
+    }
+  ],
+  "usage_metadata": {
+    "prompt_token_count": 22,
+    "total_token_count": 1021
+  },
+  "model_version": "gemini-2.5-pro"
+}
+Retry still produced empty text
+Returning empty response: retry_attempted=False | retry_reason=empty_text | finish_reason=2
+Increasing max_tokens from 500 to 1500 for Vertex ungrounded (avoids empty responses)
+Error extracting text from response: Cannot get the response text.
+Cannot get the Candidate text.
+Response candidate content has no parts (and thus no text). The candidate is likely blocked by the safety filters.
+Content:
+{
+  "role": "model"
+}
+Candidate:
+{
+  "content": {
+    "role": "model"
+  },
+  "finish_reason": "MAX_TOKENS"
+}
+Response:
+{
+  "candidates": [
+    {
+      "content": {
+        "role": "model"
+      },
+      "finish_reason": "MAX_TOKENS"
+    }
+  ],
+  "usage_metadata": {
+    "prompt_token_count": 107,
+    "total_token_count": 1606
+  },
+  "model_version": "gemini-2.5-pro"
+}
+Error extracting text from response: Cannot get the response text.
+Cannot get the Candidate text.
+Response candidate content has no parts (and thus no text). The candidate is likely blocked by the safety filters.
+Content:
+{
+  "role": "model"
+}
+Candidate:
+{
+  "content": {
+    "role": "model"
+  },
+  "finish_reason": "MAX_TOKENS"
+}
+Response:
+{
+  "candidates": [
+    {
+      "content": {
+        "role": "model"
+      },
+      "finish_reason": "MAX_TOKENS"
+    }
+  ],
+  "usage_metadata": {
+    "prompt_token_count": 107,
+    "total_token_count": 1106
+  },
+  "model_version": "gemini-2.5-pro"
+}
+Retry still produced empty text
+Returning empty response: retry_attempted=False | retry_reason=empty_text | finish_reason=2
+
+############################################################
+# COMPREHENSIVE LONGEVITY NEWS TEST
+# Timestamp: 2025-09-01T07:55:19.293238
+# Prompt: today is 31st August, 2025 - tell me the top longevity news of August
+############################################################
+
+============================================================
+Testing: gpt-5_US_ungrounded_noALS
+Model: gpt-5, Country: US, Grounded: False, ALS: False, Mode: N/A
+------------------------------------------------------------
+✓ Success: True
+✓ Grounded Effective: False
+✓ Tool Calls: 0
+✓ Response Length: 2473 chars
+✓ Citations: 0
+
+============================================================
+Testing: gpt-5_US_ungrounded_ALS
+Model: gpt-5, Country: US, Grounded: False, ALS: True, Mode: N/A
+------------------------------------------------------------
+✓ Success: True
+✓ Grounded Effective: False
+✓ Tool Calls: 0
+✓ Response Length: 2547 chars
+✓ Citations: 0
+
+============================================================
+Testing: gpt-5_US_grounded_noALS_AUTO
+Model: gpt-5, Country: US, Grounded: True, ALS: False, Mode: AUTO
+------------------------------------------------------------
+✓ Success: True
+✓ Grounded Effective: False
+✓ Tool Calls: 0
+✓ Response Length: 2200 chars
+✓ Citations: 0
+⚠ Why not grounded: tool_not_invoked
+
+============================================================
+Testing: gpt-5_US_grounded_ALS_AUTO
+Model: gpt-5, Country: US, Grounded: True, ALS: True, Mode: AUTO
+------------------------------------------------------------
+✓ Success: True
+✓ Grounded Effective: False
+✓ Tool Calls: 0
+✓ Response Length: 2378 chars
+✓ Citations: 0
+⚠ Why not grounded: tool_not_invoked
+
+============================================================
+Testing: gpt-5_US_grounded_noALS_REQUIRED
+Model: gpt-5, Country: US, Grounded: True, ALS: False, Mode: REQUIRED
+------------------------------------------------------------
+✗ Error: GROUNDING_NOT_SUPPORTED: Model gpt-5-chat-latest does not support any web_search variant (REQUIRED mode)
+
+============================================================
+Testing: gpt-5_DE_ungrounded_noALS
+Model: gpt-5, Country: DE, Grounded: False, ALS: False, Mode: N/A
+------------------------------------------------------------
+✓ Success: True
+✓ Grounded Effective: False
+✓ Tool Calls: 0
+✓ Response Length: 2289 chars
+✓ Citations: 0
+
+============================================================
+Testing: gpt-5_DE_ungrounded_ALS
+Model: gpt-5, Country: DE, Grounded: False, ALS: True, Mode: N/A
+------------------------------------------------------------
+✓ Success: True
+✓ Grounded Effective: False
+✓ Tool Calls: 0
+✓ Response Length: 2506 chars
+✓ Citations: 0
+
+============================================================
+Testing: gpt-5_DE_grounded_noALS_AUTO
+Model: gpt-5, Country: DE, Grounded: True, ALS: False, Mode: AUTO
+------------------------------------------------------------
+✓ Success: True
+✓ Grounded Effective: False
+✓ Tool Calls: 0
+✓ Response Length: 241 chars
+✓ Citations: 0
+⚠ Why not grounded: tool_not_invoked
+
+============================================================
+Testing: gpt-5_DE_grounded_ALS_AUTO
+Model: gpt-5, Country: DE, Grounded: True, ALS: True, Mode: AUTO
+------------------------------------------------------------
+✓ Success: True
+✓ Grounded Effective: False
+✓ Tool Calls: 0
+✓ Response Length: 2383 chars
+✓ Citations: 0
+⚠ Why not grounded: tool_not_invoked
+
+============================================================
+Testing: gemini-2.5-pro_US_ungrounded_noALS
+Model: gemini-2.5-pro, Country: US, Grounded: False, ALS: False, Mode: N/A
+------------------------------------------------------------
+✓ Success: False
+✓ Grounded Effective: False
+✓ Tool Calls: 0
+✓ Response Length: 0 chars
+✓ Citations: 0
+
+============================================================
+Testing: gemini-2.5-pro_US_ungrounded_ALS
+Model: gemini-2.5-pro, Country: US, Grounded: False, ALS: True, Mode: N/A
+------------------------------------------------------------
+✓ Success: False
+✓ Grounded Effective: False
+✓ Tool Calls: 0
+✓ Response Length: 0 chars
+✓ Citations: 0
+
+============================================================
+Testing: gemini-2.5-pro_US_grounded_noALS_AUTO
+Model: gemini-2.5-pro, Country: US, Grounded: True, ALS: False, Mode: AUTO
+------------------------------------------------------------
+✓ Success: True
+✓ Grounded Effective: True
+✓ Tool Calls: 5
+✓ Response Length: 5068 chars
+✓ Citations: 0
+⚠ Why not grounded: citations_missing_in_metadata
+
+============================================================
+Testing: gemini-2.5-pro_US_grounded_ALS_AUTO
+Model: gemini-2.5-pro, Country: US, Grounded: True, ALS: True, Mode: AUTO
+------------------------------------------------------------
+✓ Success: True
+✓ Grounded Effective: True
+✓ Tool Calls: 4
+✓ Response Length: 4706 chars
+✓ Citations: 0
+⚠ Why not grounded: citations_missing_in_metadata
+
+============================================================
+Testing: gemini-2.5-pro_US_grounded_noALS_REQUIRED
+Model: gemini-2.5-pro, Country: US, Grounded: True, ALS: False, Mode: REQUIRED
+------------------------------------------------------------
+✗ Error: GROUNDING_REQUIRED_FAILED: Grounding tools invoked but no citations extracted. Model: publishers/google/models/gemini-2.5-pro, Vendor: vertex
+
+============================================================
+Testing: gemini-2.5-pro_DE_ungrounded_noALS
+Model: gemini-2.5-pro, Country: DE, Grounded: False, ALS: False, Mode: N/A
+------------------------------------------------------------
+✓ Success: False
+✓ Grounded Effective: False
+✓ Tool Calls: 0
+✓ Response Length: 0 chars
+✓ Citations: 0
+
+============================================================
+Testing: gemini-2.5-pro_DE_ungrounded_ALS
+Model: gemini-2.5-pro, Country: DE, Grounded: False, ALS: True, Mode: N/A
+------------------------------------------------------------
+✓ Success: False
+✓ Grounded Effective: False
+✓ Tool Calls: 0
+✓ Response Length: 0 chars
+✓ Citations: 0
+
+============================================================
+Testing: gemini-2.5-pro_DE_grounded_noALS_AUTO
+Model: gemini-2.5-pro, Country: DE, Grounded: True, ALS: False, Mode: AUTO
+------------------------------------------------------------
+✓ Success: True
+✓ Grounded Effective: True
+✓ Tool Calls: 4
+✓ Response Length: 4784 chars
+✓ Citations: 0
+⚠ Why not grounded: citations_missing_in_metadata
+
+============================================================
+Testing: gemini-2.5-pro_DE_grounded_ALS_AUTO
+Model: gemini-2.5-pro, Country: DE, Grounded: True, ALS: True, Mode: AUTO
+------------------------------------------------------------
+✓ Success: True
+✓ Grounded Effective: True
+✓ Tool Calls: 4
+✓ Response Length: 3900 chars
+✓ Citations: 0
+⚠ Why not grounded: citations_missing_in_metadata
+
+############################################################
+# SUMMARY REPORT
+############################################################
+
+gpt-5:
+  Success Rate: 8/9
+  Grounding Effective: 0/5
+
+gemini-2.5-pro:
+  Success Rate: 4/9
+  Grounding Effective: 4/5
+
+✓ Detailed results saved to: longevity_test_results_20250901_080001.json
+
+============================================================
+ALS EFFECTIVENESS CHECK:
+
+gpt-5:
+  DE+ALS has .de domains: False
+  DE no-ALS has .de domains: False
+  ✗ No .de domains found - ALS may not be effective
+
+gemini-2.5-pro:
+  DE+ALS has .de domains: False
+  DE no-ALS has .de domains: False
+  ✗ No .de domains found - ALS may not be effective

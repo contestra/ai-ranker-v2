@@ -854,8 +854,11 @@ class OpenAIAdapter:
         
         # Check TPM budget before acquiring slot
         # Also get auto-trim suggestion if budget is tight
+        token_reservation_made = False
+        actual_tokens_committed = False
         try:
             should_trim, suggested_max = await _RL.await_tpm(estimated_tokens, effective_tokens)
+            token_reservation_made = True
             
             # Apply auto-trim if needed and allowed
             if should_trim and suggested_max and os.getenv("OPENAI_AUTO_TRIM", "true").lower() == "true":
@@ -869,11 +872,12 @@ class OpenAIAdapter:
             logger.warning(f"[RL_WARN] Rate limiting issue: {_e}")
             raise
         
-        # Proxy support removed - using direct connection only
-        _client_for_call = self.client
-        
-        # Initialize tracking variables for logging/telemetry
-        vantage_policy = str(getattr(request, 'vantage_policy', 'NONE')).upper().replace("VANTAGEPOLICY.", "")
+        try:
+            # Proxy support removed - using direct connection only
+            _client_for_call = self.client
+            
+            # Initialize tracking variables for logging/telemetry
+            vantage_policy = str(getattr(request, 'vantage_policy', 'NONE')).upper().replace("VANTAGEPOLICY.", "")
         
         # Ensure these exist even when proxy wiring is absent
         proxy_mode = None  # "rotating"/"backbone" previously; now always None (direct)
@@ -1344,6 +1348,7 @@ class OpenAIAdapter:
                 # Commit actual token usage to rate limiter
                 if total_tokens > 0:
                     await _RL.commit_actual_tokens(total_tokens, estimated_tokens, is_grounded=request.grounded)
+                    actual_tokens_committed = True
         
         # If no usage from provider, use the estimate
         if not usage or usage.get('total_tokens', 0) == 0:
@@ -1591,6 +1596,26 @@ class OpenAIAdapter:
             error_type=error_type,
             error_message=error_message
         )
+        
+        except Exception as e:
+            # If we reserved tokens but didn't commit actual usage, roll back
+            if token_reservation_made and not actual_tokens_committed:
+                try:
+                    # Commit with 0 actual tokens to release the reservation
+                    await _RL.commit_actual_tokens(0, estimated_tokens, is_grounded=request.grounded)
+                    logger.debug(f"[RL_ROLLBACK] Released token reservation of {estimated_tokens} after failure")
+                except Exception as rollback_error:
+                    logger.warning(f"[RL_ROLLBACK] Failed to rollback token reservation: {rollback_error}")
+            raise
+        
+        finally:
+            # Ensure we always commit something if we reserved
+            if token_reservation_made and not actual_tokens_committed:
+                try:
+                    await _RL.commit_actual_tokens(0, estimated_tokens, is_grounded=request.grounded)
+                    logger.debug(f"[RL_CLEANUP] Released unused token reservation")
+                except Exception:
+                    pass
     
     def supports_model(self, model: str) -> bool:
         """Check if model is in allowlist"""
@@ -1652,5 +1677,3 @@ def _send_responses_http_with_grounding(session, body: dict, grounded_mode: str,
     return resp
 
 
-class GroundingNotSupportedError(Exception):
-    pass
