@@ -191,7 +191,7 @@ def _select_and_extract_citations(resp, tenant_id: str = None, account_id: str =
     
     # Clamp citation_extractor_v2 to [0, 1] for safety
     v2_threshold = max(0.0, min(1.0, settings.citation_extractor_v2))
-    print(f"[DEBUG] citation_extractor_v2={settings.citation_extractor_v2}, v2_threshold={v2_threshold}, bucket={bucket}")
+    logger.debug(f"[CITATION_SELECTOR] citation_extractor_v2={settings.citation_extractor_v2}, v2_threshold={v2_threshold}, bucket={bucket}")
     
     # Boundary rule: bucket strictly less than threshold goes to V2
     # e.g., 0.05 threshold means buckets [0, 0.05) get V2 (exactly 5%)
@@ -319,16 +319,17 @@ def _extract_vertex_citations(resp) -> List[Dict]:
     seen_urls = {}  # normalized_url -> citation dict (for deduplication)
     
     # DEBUG: Log what type of response we got
-    print(f"[CITATIONS_DEBUG] Response type: {type(resp)}")
-    if hasattr(resp, 'candidates'):
-        print(f"[CITATIONS_DEBUG] Has candidates: {len(resp.candidates) if resp.candidates else 0}")
-        if resp.candidates and len(resp.candidates) > 0:
-            cand = resp.candidates[0]
-            print(f"[CITATIONS_DEBUG] Candidate type: {type(cand)}")
-            if hasattr(cand, 'grounding_metadata'):
-                print(f"[CITATIONS_DEBUG] Has grounding_metadata attr")
-            if hasattr(cand, 'groundingMetadata'):
-                print(f"[CITATIONS_DEBUG] Has groundingMetadata attr")
+    if DEBUG_GROUNDING:
+        logger.debug(f"[CITATIONS_DEBUG] Response type: {type(resp)}")
+        if hasattr(resp, 'candidates'):
+            logger.debug(f"[CITATIONS_DEBUG] Has candidates: {len(resp.candidates) if resp.candidates else 0}")
+            if resp.candidates and len(resp.candidates) > 0:
+                cand = resp.candidates[0]
+                logger.debug(f"[CITATIONS_DEBUG] Candidate type: {type(cand)}")
+                if hasattr(cand, 'grounding_metadata'):
+                    logger.debug(f"[CITATIONS_DEBUG] Has grounding_metadata attr")
+                if hasattr(cand, 'groundingMetadata'):
+                    logger.debug(f"[CITATIONS_DEBUG] Has groundingMetadata attr")
     
     def add_citation(raw_item: dict, source_type: Optional[str] = None):
         if not raw_item:
@@ -728,7 +729,8 @@ def _extract_vertex_citations(resp) -> List[Dict]:
     
     # Enhanced forensics for tools>0 & citations==0
     tool_count = 0
-    anchored_count = len([c for c in citations if c.get('source_type') != 'unlinked'])
+    # Use same anchored definition as telemetry for consistency
+    anchored_count = len([c for c in citations if c.get('source_type') in {'direct_uri', 'v1_join'}])
     
     # Count tool calls
     if hasattr(resp, 'candidates'):

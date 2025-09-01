@@ -300,7 +300,9 @@ class UnifiedLLMAdapter:
                     if request.vendor == 'openai':
                         anchored_types = {'annotation', 'url_citation'}  # url_citation for backward compat
                     else:
-                        anchored_types = {'direct_uri', 'v1_join', 'groundingChunks'}
+                        # Vertex: only JOIN-anchored or direct citations count as anchored
+                        # groundingChunks are unlinked evidence, not text-anchored
+                        anchored_types = {'direct_uri', 'v1_join'}
                     
                     anchored_count = sum(1 for c in citations 
                                        if c.get('source_type') in anchored_types)

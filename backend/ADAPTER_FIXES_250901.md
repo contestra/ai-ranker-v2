@@ -202,14 +202,40 @@ export CITATION_EXTRACTOR_ENABLE_LEGACY=true
 2. OpenAI cannot force tool invocation (API limitation)
 3. ALS fixed date can still affect time-sensitive queries despite guardrail
 
+## Final Review Fixes (September 1, 2025 - Evening)
+
+### OpenAI REQUIRED Mode Policy Decision
+**Decision: Option A - Fail-closed approach**
+- REQUIRED mode fails immediately when web_search doesn't support tool_choice:"required"
+- Rationale: Maintains strict contract that REQUIRED means "must ground or fail"
+- Alternative Option B (attempt-then-enforce) rejected to avoid ambiguity
+
+### Code Quality Improvements
+1. **Vertex forensics counter** - Fixed to use correct anchored types:
+   ```python
+   anchored_count = len([c for c in citations if c.get('source_type') in {'direct_uri', 'v1_join'}])
+   ```
+
+2. **Router anchored types** - Removed 'groundingChunks' from anchored set:
+   ```python
+   anchored_types = {'direct_uri', 'v1_join'}  # groundingChunks removed
+   ```
+
+3. **Debug logging** - Replaced print statements with logger.debug in Vertex adapter
+
+4. **Duplicate extraction removed** - OpenAI no longer extracts citations twice
+
+5. **ALS HMAC** - Deferred per user request (not a priority)
+
 ## Future Improvements
 1. Consider caching citation extraction results
 2. Add retry logic for empty grounding results
 3. Implement citation quality scoring
 4. Add per-model grounding effectiveness metrics
+5. Telemetry shape consistency across adapters
 
 ## References
 - Original issue: Citation extraction showing 0 despite tool calls
-- Review by: ChatGPT (comprehensive multi-phase review)
+- Review by: ChatGPT (comprehensive multi-phase review + final nits)
 - Test reports: LONGEVITY_MATRIX_REPORT_*.md
 - Backup location: /mnt/d/OneDrive/CONTESTRA/Microapps/Adapter-Copies/250901-*

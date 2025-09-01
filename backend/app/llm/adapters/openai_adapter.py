@@ -1619,12 +1619,8 @@ class OpenAIAdapter:
             }
         
         # ---- Citations (normalized) ----
-        try:
-            citations = _extract_openai_citations(response)
-            if citations:
-                metadata['citations'] = citations
-        except Exception:
-            pass
+        # Note: Citations are already extracted when grounded_effective=True (see lines ~1340-1360)
+        # No need to extract again here; metadata['citations'] is already populated if applicable
         
         # Add usage tracking metadata
         metadata['usage_source'] = usage_source
