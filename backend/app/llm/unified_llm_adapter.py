@@ -555,6 +555,9 @@ class UnifiedLLMAdapter:
                 'anchored_citations_count': response.metadata.get('anchored_citations_count', 0) if hasattr(response, 'metadata') else 0,
                 'unlinked_sources_count': response.metadata.get('unlinked_sources_count', 0) if hasattr(response, 'metadata') else 0,
                 
+                # Evidence availability flag
+                'grounded_evidence_unavailable': False,  # Will be set below if grounded but no anchored citations
+                
                 # Additional telemetry
                 'web_search_count': response.metadata.get('web_search_count', 0) if hasattr(response, 'metadata') else 0,
                 'web_grounded': response.metadata.get('web_grounded', False) if hasattr(response, 'metadata') else False,
@@ -568,6 +571,10 @@ class UnifiedLLMAdapter:
                 meta_json['citations_count'] = len(c) if isinstance(c, list) else 0
             except Exception:
                 meta_json['citations_count'] = 0
+            
+            # Set grounded_evidence_unavailable flag when grounded but no anchored citations
+            if response.grounded_effective and meta_json['anchored_citations_count'] == 0:
+                meta_json['grounded_evidence_unavailable'] = True
             
             # Log comprehensive telemetry
             logger.info(

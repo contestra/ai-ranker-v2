@@ -1,0 +1,598 @@
+{
+  "timestamp": "2025-09-01T18:45:02.126244",
+  "prompt": "what was the top longevity and life-extension news during August, 2025",
+  "results": [
+    {
+      "config": {
+        "vendor": "openai",
+        "model": "gpt-5",
+        "country": "US",
+        "grounded": true,
+        "als": true
+      },
+      "config_name": "openai_gpt_5_US_grounded_ALS",
+      "success": true,
+      "error": null,
+      "response": {
+        "content": "",
+        "length": 0,
+        "truncated": ""
+      },
+      "metadata": {
+        "grounded_effective": false,
+        "citations_count": 0,
+        "anchored_citations": 0,
+        "unlinked_sources": 0,
+        "tool_calls": 0,
+        "response_api": null,
+        "model_adjusted": false,
+        "original_model": null,
+        "feature_flags": {},
+        "runtime_flags": {},
+        "why_not_grounded": null,
+        "extraction_path": null
+      },
+      "timing": {
+        "start": 1756745072.0775545,
+        "end": 1756745072.0790443,
+        "latency_ms": 1.489877700805664
+      },
+      "usage": {}
+    },
+    {
+      "config": {
+        "vendor": "openai",
+        "model": "gpt-5",
+        "country": "US",
+        "grounded": true,
+        "als": false
+      },
+      "config_name": "openai_gpt_5_US_grounded_noALS",
+      "success": true,
+      "error": null,
+      "response": {
+        "content": "",
+        "length": 0,
+        "truncated": ""
+      },
+      "metadata": {
+        "grounded_effective": false,
+        "citations_count": 0,
+        "anchored_citations": 0,
+        "unlinked_sources": 0,
+        "tool_calls": 0,
+        "response_api": null,
+        "model_adjusted": false,
+        "original_model": null,
+        "feature_flags": {},
+        "runtime_flags": {},
+        "why_not_grounded": null,
+        "extraction_path": null
+      },
+      "timing": {
+        "start": 1756745074.0805507,
+        "end": 1756745074.0807874,
+        "latency_ms": 0.23674964904785156
+      },
+      "usage": {}
+    },
+    {
+      "config": {
+        "vendor": "openai",
+        "model": "gpt-5-chat-latest",
+        "country": "US",
+        "grounded": false,
+        "als": true
+      },
+      "config_name": "openai_gpt_5_chat_latest_US_ungrounded_ALS",
+      "success": true,
+      "error": null,
+      "response": {
+        "content": "",
+        "length": 0,
+        "truncated": ""
+      },
+      "metadata": {
+        "grounded_effective": false,
+        "citations_count": 0,
+        "anchored_citations": 0,
+        "unlinked_sources": 0,
+        "tool_calls": 0,
+        "response_api": null,
+        "model_adjusted": false,
+        "original_model": null,
+        "feature_flags": {},
+        "runtime_flags": {},
+        "why_not_grounded": null,
+        "extraction_path": null
+      },
+      "timing": {
+        "start": 1756745076.0818071,
+        "end": 1756745076.081998,
+        "latency_ms": 0.19097328186035156
+      },
+      "usage": {}
+    },
+    {
+      "config": {
+        "vendor": "openai",
+        "model": "gpt-5-chat-latest",
+        "country": "US",
+        "grounded": false,
+        "als": false
+      },
+      "config_name": "openai_gpt_5_chat_latest_US_ungrounded_noALS",
+      "success": true,
+      "error": null,
+      "response": {
+        "content": "",
+        "length": 0,
+        "truncated": ""
+      },
+      "metadata": {
+        "grounded_effective": false,
+        "citations_count": 0,
+        "anchored_citations": 0,
+        "unlinked_sources": 0,
+        "tool_calls": 0,
+        "response_api": null,
+        "model_adjusted": false,
+        "original_model": null,
+        "feature_flags": {},
+        "runtime_flags": {},
+        "why_not_grounded": null,
+        "extraction_path": null
+      },
+      "timing": {
+        "start": 1756745078.0826328,
+        "end": 1756745078.0827584,
+        "latency_ms": 0.12564659118652344
+      },
+      "usage": {}
+    },
+    {
+      "config": {
+        "vendor": "openai",
+        "model": "gpt-5",
+        "country": "DE",
+        "grounded": true,
+        "als": true
+      },
+      "config_name": "openai_gpt_5_DE_grounded_ALS",
+      "success": true,
+      "error": null,
+      "response": {
+        "content": "",
+        "length": 0,
+        "truncated": ""
+      },
+      "metadata": {
+        "grounded_effective": false,
+        "citations_count": 0,
+        "anchored_citations": 0,
+        "unlinked_sources": 0,
+        "tool_calls": 0,
+        "response_api": null,
+        "model_adjusted": false,
+        "original_model": null,
+        "feature_flags": {},
+        "runtime_flags": {},
+        "why_not_grounded": null,
+        "extraction_path": null
+      },
+      "timing": {
+        "start": 1756745080.0833468,
+        "end": 1756745080.0921197,
+        "latency_ms": 8.772850036621094
+      },
+      "usage": {}
+    },
+    {
+      "config": {
+        "vendor": "openai",
+        "model": "gpt-5",
+        "country": "DE",
+        "grounded": true,
+        "als": false
+      },
+      "config_name": "openai_gpt_5_DE_grounded_noALS",
+      "success": true,
+      "error": null,
+      "response": {
+        "content": "",
+        "length": 0,
+        "truncated": ""
+      },
+      "metadata": {
+        "grounded_effective": false,
+        "citations_count": 0,
+        "anchored_citations": 0,
+        "unlinked_sources": 0,
+        "tool_calls": 0,
+        "response_api": null,
+        "model_adjusted": false,
+        "original_model": null,
+        "feature_flags": {},
+        "runtime_flags": {},
+        "why_not_grounded": null,
+        "extraction_path": null
+      },
+      "timing": {
+        "start": 1756745082.0941756,
+        "end": 1756745082.0943477,
+        "latency_ms": 0.17213821411132812
+      },
+      "usage": {}
+    },
+    {
+      "config": {
+        "vendor": "openai",
+        "model": "gpt-5-chat-latest",
+        "country": "DE",
+        "grounded": false,
+        "als": true
+      },
+      "config_name": "openai_gpt_5_chat_latest_DE_ungrounded_ALS",
+      "success": true,
+      "error": null,
+      "response": {
+        "content": "",
+        "length": 0,
+        "truncated": ""
+      },
+      "metadata": {
+        "grounded_effective": false,
+        "citations_count": 0,
+        "anchored_citations": 0,
+        "unlinked_sources": 0,
+        "tool_calls": 0,
+        "response_api": null,
+        "model_adjusted": false,
+        "original_model": null,
+        "feature_flags": {},
+        "runtime_flags": {},
+        "why_not_grounded": null,
+        "extraction_path": null
+      },
+      "timing": {
+        "start": 1756745084.096514,
+        "end": 1756745084.0968013,
+        "latency_ms": 0.2872943878173828
+      },
+      "usage": {}
+    },
+    {
+      "config": {
+        "vendor": "openai",
+        "model": "gpt-5-chat-latest",
+        "country": "DE",
+        "grounded": false,
+        "als": false
+      },
+      "config_name": "openai_gpt_5_chat_latest_DE_ungrounded_noALS",
+      "success": true,
+      "error": null,
+      "response": {
+        "content": "",
+        "length": 0,
+        "truncated": ""
+      },
+      "metadata": {
+        "grounded_effective": false,
+        "citations_count": 0,
+        "anchored_citations": 0,
+        "unlinked_sources": 0,
+        "tool_calls": 0,
+        "response_api": null,
+        "model_adjusted": false,
+        "original_model": null,
+        "feature_flags": {},
+        "runtime_flags": {},
+        "why_not_grounded": null,
+        "extraction_path": null
+      },
+      "timing": {
+        "start": 1756745086.099165,
+        "end": 1756745086.0992794,
+        "latency_ms": 0.11444091796875
+      },
+      "usage": {}
+    },
+    {
+      "config": {
+        "vendor": "vertex",
+        "model": "gemini-2.5-pro",
+        "country": "US",
+        "grounded": true,
+        "als": true
+      },
+      "config_name": "vertex_gemini_2_5_pro_US_grounded_ALS",
+      "success": true,
+      "error": null,
+      "response": {
+        "content": "",
+        "length": 0,
+        "truncated": ""
+      },
+      "metadata": {
+        "grounded_effective": false,
+        "citations_count": 0,
+        "anchored_citations": 0,
+        "unlinked_sources": 0,
+        "tool_calls": 0,
+        "response_api": null,
+        "model_adjusted": false,
+        "original_model": null,
+        "feature_flags": {},
+        "runtime_flags": {},
+        "why_not_grounded": null,
+        "extraction_path": null
+      },
+      "timing": {
+        "start": 1756745088.1013405,
+        "end": 1756745088.101576,
+        "latency_ms": 0.23555755615234375
+      },
+      "usage": {}
+    },
+    {
+      "config": {
+        "vendor": "vertex",
+        "model": "gemini-2.5-pro",
+        "country": "US",
+        "grounded": true,
+        "als": false
+      },
+      "config_name": "vertex_gemini_2_5_pro_US_grounded_noALS",
+      "success": true,
+      "error": null,
+      "response": {
+        "content": "",
+        "length": 0,
+        "truncated": ""
+      },
+      "metadata": {
+        "grounded_effective": false,
+        "citations_count": 0,
+        "anchored_citations": 0,
+        "unlinked_sources": 0,
+        "tool_calls": 0,
+        "response_api": null,
+        "model_adjusted": false,
+        "original_model": null,
+        "feature_flags": {},
+        "runtime_flags": {},
+        "why_not_grounded": null,
+        "extraction_path": null
+      },
+      "timing": {
+        "start": 1756745090.1035209,
+        "end": 1756745090.1036437,
+        "latency_ms": 0.12278556823730469
+      },
+      "usage": {}
+    },
+    {
+      "config": {
+        "vendor": "vertex",
+        "model": "gemini-2.5-pro",
+        "country": "US",
+        "grounded": false,
+        "als": true
+      },
+      "config_name": "vertex_gemini_2_5_pro_US_ungrounded_ALS",
+      "success": true,
+      "error": null,
+      "response": {
+        "content": "",
+        "length": 0,
+        "truncated": ""
+      },
+      "metadata": {
+        "grounded_effective": false,
+        "citations_count": 0,
+        "anchored_citations": 0,
+        "unlinked_sources": 0,
+        "tool_calls": 0,
+        "response_api": null,
+        "model_adjusted": false,
+        "original_model": null,
+        "feature_flags": {},
+        "runtime_flags": {},
+        "why_not_grounded": null,
+        "extraction_path": null
+      },
+      "timing": {
+        "start": 1756745092.1056778,
+        "end": 1756745092.1058571,
+        "latency_ms": 0.179290771484375
+      },
+      "usage": {}
+    },
+    {
+      "config": {
+        "vendor": "vertex",
+        "model": "gemini-2.5-pro",
+        "country": "US",
+        "grounded": false,
+        "als": false
+      },
+      "config_name": "vertex_gemini_2_5_pro_US_ungrounded_noALS",
+      "success": true,
+      "error": null,
+      "response": {
+        "content": "",
+        "length": 0,
+        "truncated": ""
+      },
+      "metadata": {
+        "grounded_effective": false,
+        "citations_count": 0,
+        "anchored_citations": 0,
+        "unlinked_sources": 0,
+        "tool_calls": 0,
+        "response_api": null,
+        "model_adjusted": false,
+        "original_model": null,
+        "feature_flags": {},
+        "runtime_flags": {},
+        "why_not_grounded": null,
+        "extraction_path": null
+      },
+      "timing": {
+        "start": 1756745094.1079094,
+        "end": 1756745094.1080356,
+        "latency_ms": 0.12612342834472656
+      },
+      "usage": {}
+    },
+    {
+      "config": {
+        "vendor": "vertex",
+        "model": "gemini-2.5-pro",
+        "country": "DE",
+        "grounded": true,
+        "als": true
+      },
+      "config_name": "vertex_gemini_2_5_pro_DE_grounded_ALS",
+      "success": true,
+      "error": null,
+      "response": {
+        "content": "",
+        "length": 0,
+        "truncated": ""
+      },
+      "metadata": {
+        "grounded_effective": false,
+        "citations_count": 0,
+        "anchored_citations": 0,
+        "unlinked_sources": 0,
+        "tool_calls": 0,
+        "response_api": null,
+        "model_adjusted": false,
+        "original_model": null,
+        "feature_flags": {},
+        "runtime_flags": {},
+        "why_not_grounded": null,
+        "extraction_path": null
+      },
+      "timing": {
+        "start": 1756745096.1101933,
+        "end": 1756745096.110462,
+        "latency_ms": 0.26869773864746094
+      },
+      "usage": {}
+    },
+    {
+      "config": {
+        "vendor": "vertex",
+        "model": "gemini-2.5-pro",
+        "country": "DE",
+        "grounded": true,
+        "als": false
+      },
+      "config_name": "vertex_gemini_2_5_pro_DE_grounded_noALS",
+      "success": true,
+      "error": null,
+      "response": {
+        "content": "",
+        "length": 0,
+        "truncated": ""
+      },
+      "metadata": {
+        "grounded_effective": false,
+        "citations_count": 0,
+        "anchored_citations": 0,
+        "unlinked_sources": 0,
+        "tool_calls": 0,
+        "response_api": null,
+        "model_adjusted": false,
+        "original_model": null,
+        "feature_flags": {},
+        "runtime_flags": {},
+        "why_not_grounded": null,
+        "extraction_path": null
+      },
+      "timing": {
+        "start": 1756745098.112348,
+        "end": 1756745098.1124454,
+        "latency_ms": 0.0972747802734375
+      },
+      "usage": {}
+    },
+    {
+      "config": {
+        "vendor": "vertex",
+        "model": "gemini-2.5-pro",
+        "country": "DE",
+        "grounded": false,
+        "als": true
+      },
+      "config_name": "vertex_gemini_2_5_pro_DE_ungrounded_ALS",
+      "success": true,
+      "error": null,
+      "response": {
+        "content": "",
+        "length": 0,
+        "truncated": ""
+      },
+      "metadata": {
+        "grounded_effective": false,
+        "citations_count": 0,
+        "anchored_citations": 0,
+        "unlinked_sources": 0,
+        "tool_calls": 0,
+        "response_api": null,
+        "model_adjusted": false,
+        "original_model": null,
+        "feature_flags": {},
+        "runtime_flags": {},
+        "why_not_grounded": null,
+        "extraction_path": null
+      },
+      "timing": {
+        "start": 1756745100.1146557,
+        "end": 1756745100.1148424,
+        "latency_ms": 0.18668174743652344
+      },
+      "usage": {}
+    },
+    {
+      "config": {
+        "vendor": "vertex",
+        "model": "gemini-2.5-pro",
+        "country": "DE",
+        "grounded": false,
+        "als": false
+      },
+      "config_name": "vertex_gemini_2_5_pro_DE_ungrounded_noALS",
+      "success": true,
+      "error": null,
+      "response": {
+        "content": "",
+        "length": 0,
+        "truncated": ""
+      },
+      "metadata": {
+        "grounded_effective": false,
+        "citations_count": 0,
+        "anchored_citations": 0,
+        "unlinked_sources": 0,
+        "tool_calls": 0,
+        "response_api": null,
+        "model_adjusted": false,
+        "original_model": null,
+        "feature_flags": {},
+        "runtime_flags": {},
+        "why_not_grounded": null,
+        "extraction_path": null
+      },
+      "timing": {
+        "start": 1756745102.1167939,
+        "end": 1756745102.116915,
+        "latency_ms": 0.12111663818359375
+      },
+      "usage": {}
+    }
+  ]
+}

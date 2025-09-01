@@ -3,7 +3,11 @@
     "allow": [
       "Bash(zip:*)",
       "Bash(tar:*)",
-      "Bash(git checkout:*)"
+      "Bash(git checkout:*)",
+      "Bash(sed:*)",
+      "Bash(while:*)",
+      "Bash(do sleep:*)",
+      "Bash(done)"
     ],
     "deny": [],
     "ask": [],

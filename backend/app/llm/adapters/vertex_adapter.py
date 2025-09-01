@@ -163,7 +163,7 @@ def _compute_ab_bucket(tenant_id: Optional[str] = None, account_id: Optional[str
 
 
 def _select_and_extract_citations(resp, tenant_id: str = None, account_id: str = None,
-                                 template_id: str = None) -> Tuple[List[Dict], Dict[str, Any]]:
+                                 template_id: str = None, tool_call_count: int = 0) -> Tuple[List[Dict], Dict[str, Any]]:
     """
     A/B selection wrapper for citation extraction with proper flag precedence.
     
@@ -211,10 +211,10 @@ def _select_and_extract_citations(resp, tenant_id: str = None, account_id: str =
     
     try:
         if use_v2:
-            # Use V2 extractor
+            # Use V2 extractor - pass tool_call_count for reliable unlinked emission
             variant_used = "v2"
             telemetry["extractor_variant"] = "v2"
-            citations = _extract_vertex_citations(resp)
+            citations = _extract_vertex_citations(resp, tool_call_count=tool_call_count)
         else:
             # Use legacy extractor
             if settings.citation_extractor_enable_legacy:
@@ -225,7 +225,7 @@ def _select_and_extract_citations(resp, tenant_id: str = None, account_id: str =
                 # Legacy disabled, use V2 anyway
                 variant_used = "v2"
                 telemetry["extractor_variant"] = "v2_forced"
-                citations = _extract_vertex_citations(resp)
+                citations = _extract_vertex_citations(resp, tool_call_count=tool_call_count)
                 
     except Exception as e:
         # On error, try fallback
@@ -307,13 +307,17 @@ def _extract_vertex_citations_legacy(resp) -> List[Dict]:
     return citations
 
 
-def _extract_vertex_citations(resp) -> List[Dict]:
+def _extract_vertex_citations(resp, tool_call_count: int = 0) -> List[Dict]:
     """
     Extract citations from Vertex/Gemini response following uniform schema.
     Handles multiple SDK variants and field names, including the v1 JOIN pattern.
     
     V1 pattern: citations (spans with sourceIds) → citedSources (actual URLs)
     Legacy patterns: groundingAttributions, groundingChunks, etc. with direct URLs
+    
+    Args:
+        resp: The Vertex/Gemini response object
+        tool_call_count: Number of tool calls detected (for reliable unlinked emission)
     """
     citations = []
     seen_urls = {}  # normalized_url -> citation dict (for deduplication)
@@ -670,16 +674,19 @@ def _extract_vertex_citations(resp) -> List[Dict]:
                 elif cit_dict.get("url") or cit_dict.get("uri"):
                     add_citation(cit_dict, source_type="direct_uri")
             
-            # Determine if tools were called for this candidate (cheap, typed-path only)
-            tools_called = False
-            try:
-                if typed_cand and hasattr(typed_cand, "content") and hasattr(typed_cand.content, "parts"):
-                    for _part in typed_cand.content.parts:
-                        if hasattr(_part, "function_call") and _part.function_call:
-                            tools_called = True
-                            break
-            except Exception:
-                pass
+            # Determine if tools were called - use tool_call_count for reliability
+            # Fallback to detecting function_call parts if tool_call_count not provided
+            tools_called = tool_call_count > 0
+            if not tools_called:
+                # Try detecting from typed candidate as fallback
+                try:
+                    if typed_cand and hasattr(typed_cand, "content") and hasattr(typed_cand.content, "parts"):
+                        for _part in typed_cand.content.parts:
+                            if hasattr(_part, "function_call") and _part.function_call:
+                                tools_called = True
+                                break
+                except Exception:
+                    pass
             
             # STEP 3: Optionally flush unlinked sources
             # Emit sources that weren't referenced by citations (unlinked) when:
@@ -821,7 +828,7 @@ def _extract_vertex_citations(resp) -> List[Dict]:
 
 def _audit_grounding_metadata(resp: Any) -> dict:
     """Forensic audit of grounding metadata structure when citations are missing."""
-    audit = {"candidates": 0, "grounding_metadata_keys": [], "example": {}}
+    audit = {"candidates": 0, "grounding_metadata_keys": [], "example": {}, "samples": {}}
     try:
         if hasattr(resp, "candidates") and resp.candidates:
             audit["candidates"] = len(resp.candidates)
@@ -835,6 +842,19 @@ def _audit_grounding_metadata(resp: Any) -> dict:
                 gm_dict = dict(gm)  # works on some SDKs
                 keys.update(gm_dict.keys())
                 audit["example"] = {k: gm_dict[k] for k in list(gm_dict)[:3]}
+                
+                # Add samples of non-empty arrays (first 2 items, sanitized)
+                for key in ["grounding_chunks", "grounding_supports", "web_search_queries"]:
+                    if key in gm_dict and gm_dict[key]:
+                        items = gm_dict[key][:2]  # First 2 items
+                        # Sanitize to avoid PII
+                        if key == "grounding_chunks" and items:
+                            audit["samples"][key] = [
+                                {"has_web": "web" in str(item), "has_uri": "uri" in str(item)}
+                                for item in items
+                            ]
+                        elif key == "web_search_queries" and items:
+                            audit["samples"][key] = [str(q)[:50] for q in items]  # Truncate queries
             except Exception:
                 for k in dir(gm):
                     if not k.startswith("_"):
@@ -1808,7 +1828,8 @@ Provide your response as valid JSON with appropriate keys for the information.""
                 template_id = req.meta.get("template_id")
             
             step1_citations, citation_telemetry = _select_and_extract_citations(
-                step1_resp, tenant_id=tenant_id, account_id=account_id, template_id=template_id
+                step1_resp, tenant_id=tenant_id, account_id=account_id, template_id=template_id,
+                tool_call_count=tool_call_count
             )
             metadata.update(citation_telemetry)
             step1_text = _extract_text_from_candidates(step1_resp)
@@ -1845,9 +1866,14 @@ Provide your response as valid JSON with appropriate keys for the information.""
             else:
                 # Forensic audit when tools were used but no citations found
                 if metadata.get("tool_call_count", 0) > 0:
-                    metadata["citations_status_reason"] = "citations_missing_despite_tool_calls"
                     audit = _audit_grounding_metadata(step1_resp)
                     metadata["citations_audit"] = audit
+                    
+                    # Determine specific reason for missing citations
+                    if audit.get("example", {}).get("grounding_chunks") == []:
+                        metadata["citations_status_reason"] = "provider_returned_empty_evidence"
+                    else:
+                        metadata["citations_status_reason"] = "citations_missing_despite_tool_calls"
                     
                     # Structured log for easy grep
                     structured_log = {
@@ -1855,7 +1881,7 @@ Provide your response as valid JSON with appropriate keys for the information.""
                         "tool_calls": tool_call_count,
                         "citations": 0,
                         "keys": audit.get("grounding_metadata_keys", []),
-                        "citations_status_reason": "citations_missing_despite_tool_calls"
+                        "citations_status_reason": metadata.get("citations_status_reason")
                     }
                     logger.info(f"[VERTEX_CITATION_AUDIT] {json.dumps(structured_log)}")
             
@@ -1894,7 +1920,8 @@ Provide your response as valid JSON with appropriate keys for the information.""
                     template_id = req.meta.get("template_id")
                 
                 cits, citation_telemetry = _select_and_extract_citations(
-                    response, tenant_id=tenant_id, account_id=account_id, template_id=template_id
+                    response, tenant_id=tenant_id, account_id=account_id, template_id=template_id,
+                    tool_call_count=tool_call_count
                 )
                 metadata.update(citation_telemetry)
                 if cits:
@@ -1902,9 +1929,14 @@ Provide your response as valid JSON with appropriate keys for the information.""
                 else:
                     # Forensic audit when tools were used but no citations found
                     if metadata.get("tool_call_count", 0) > 0:
-                        metadata["citations_status_reason"] = "citations_missing_despite_tool_calls"
                         audit = _audit_grounding_metadata(response)
                         metadata["citations_audit"] = audit
+                        
+                        # Determine specific reason for missing citations
+                        if audit.get("example", {}).get("grounding_chunks") == []:
+                            metadata["citations_status_reason"] = "provider_returned_empty_evidence"
+                        else:
+                            metadata["citations_status_reason"] = "citations_missing_despite_tool_calls"
                         
                         # Structured log for easy grep
                         structured_log = {
@@ -1912,7 +1944,7 @@ Provide your response as valid JSON with appropriate keys for the information.""
                             "tool_calls": tool_call_count,
                             "citations": 0,
                             "keys": audit.get("grounding_metadata_keys", []),
-                            "citations_status_reason": "citations_missing_despite_tool_calls"
+                            "citations_status_reason": metadata.get("citations_status_reason")
                         }
                         logger.info(f"[VERTEX_CITATION_AUDIT] {json.dumps(structured_log)}")
             except Exception:

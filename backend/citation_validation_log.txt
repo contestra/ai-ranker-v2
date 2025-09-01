@@ -1,0 +1,173 @@
+[LLM_TIMEOUT] {"vendor": "openai", "model": "gpt-5-chat-latest", "vantage_policy": "NONE", "proxy_mode": "disabled", "country": "none", "grounded": true, "max_tokens": 1000, "timeouts_s": {"connect": 2.0, "read": 120.0, "total": 122.0}, "error_type": "error", "error_msg": "Error code: 400 - {'error': {'message': \"Hosted tool 'web_search_preview' is not supported with gpt-5-chat-latest.\", 'type': 'invalid_request_error', 'param': 'tools', 'code': None}}"}
+[TOOL_FALLBACK] Both tool types unsupported for gpt-5-chat-latest
+Grounding not supported for gpt-5-chat-latest, proceeding without
+[CITATIONS_FORENSICS] Tools called but no anchored citations: {'tool_call_count': 1, 'anchored_citations_count': 0, 'unlinked_sources_count': 5, 'typed_candidates_count': 1, 'dict_candidates_count': 1, 'citations_shape_set': ['unlinked'], 'citations_status_reason': 'no_anchored_citations', 'candidate_preview': "[{'index': 0, 'has_typed': True, 'has_dict': True}]"}
+[CITATIONS_FORENSICS] Tools called but no anchored citations: {'tool_call_count': 1, 'anchored_citations_count': 0, 'unlinked_sources_count': 10, 'typed_candidates_count': 1, 'dict_candidates_count': 1, 'citations_shape_set': ['unlinked'], 'citations_status_reason': 'no_anchored_citations', 'candidate_preview': "[{'index': 0, 'has_typed': True, 'has_dict': True}]"}
+[CITATIONS_FORENSICS] Tools called but no anchored citations: {'tool_call_count': 1, 'anchored_citations_count': 0, 'unlinked_sources_count': 10, 'typed_candidates_count': 1, 'dict_candidates_count': 1, 'citations_shape_set': ['unlinked'], 'citations_status_reason': 'no_anchored_citations', 'candidate_preview': "[{'index': 0, 'has_typed': True, 'has_dict': True}]"}
+[CITATIONS_FORENSICS] Tools called but no anchored citations: {'tool_call_count': 1, 'anchored_citations_count': 0, 'unlinked_sources_count': 10, 'typed_candidates_count': 1, 'dict_candidates_count': 1, 'citations_shape_set': ['unlinked'], 'citations_status_reason': 'no_anchored_citations', 'candidate_preview': "[{'index': 0, 'has_typed': True, 'has_dict': True}]"}
+[CITATIONS_FORENSICS] Tools called but no anchored citations: {'tool_call_count': 1, 'anchored_citations_count': 0, 'unlinked_sources_count': 6, 'typed_candidates_count': 1, 'dict_candidates_count': 1, 'citations_shape_set': ['unlinked'], 'citations_status_reason': 'no_anchored_citations', 'candidate_preview': "[{'index': 0, 'has_typed': True, 'has_dict': True}]"}
+[CITATIONS_FORENSICS] Tools called but no anchored citations: {'tool_call_count': 1, 'anchored_citations_count': 0, 'unlinked_sources_count': 10, 'typed_candidates_count': 1, 'dict_candidates_count': 1, 'citations_shape_set': ['unlinked'], 'citations_status_reason': 'no_anchored_citations', 'candidate_preview': "[{'index': 0, 'has_typed': True, 'has_dict': True}]"}
+[CITATIONS_FORENSICS] Tools called but no anchored citations: {'tool_call_count': 1, 'anchored_citations_count': 0, 'unlinked_sources_count': 10, 'typed_candidates_count': 1, 'dict_candidates_count': 1, 'citations_shape_set': ['unlinked'], 'citations_status_reason': 'no_anchored_citations', 'candidate_preview': "[{'index': 0, 'has_typed': True, 'has_dict': True}]"}
+Starting Citation Validation Tests...
+Testing 7 queries with 2 vendors (grounded only)
+Total tests: 14
+
+============================================================
+Testing: openai_2024_election_grounded
+Query: What were the key results of the 2024 US presidential election?...
+============================================================
+✓ Success: grounded_effective=False, citations=0, anchored=0, evidence_unavailable=False
+
+============================================================
+Testing: vertex_2024_election_grounded
+Query: What were the key results of the 2024 US presidential election?...
+============================================================
+✓ Success: grounded_effective=True, citations=5, anchored=0, evidence_unavailable=False
+
+============================================================
+Testing: openai_openai_news_grounded
+Query: What are the latest developments from OpenAI in 2024?...
+============================================================
+✓ Success: grounded_effective=False, citations=0, anchored=0, evidence_unavailable=False
+
+============================================================
+Testing: vertex_openai_news_grounded
+Query: What are the latest developments from OpenAI in 2024?...
+============================================================
+✓ Success: grounded_effective=True, citations=10, anchored=0, evidence_unavailable=False
+
+============================================================
+Testing: openai_climate_2024_grounded
+Query: What were the major climate change events and agreements in 2024?...
+============================================================
+✓ Success: grounded_effective=False, citations=0, anchored=0, evidence_unavailable=False
+
+============================================================
+Testing: vertex_climate_2024_grounded
+Query: What were the major climate change events and agreements in 2024?...
+============================================================
+✓ Success: grounded_effective=True, citations=10, anchored=0, evidence_unavailable=False
+
+============================================================
+Testing: openai_tech_news_grounded
+Query: What are the most important technology breakthroughs announced in 2024?...
+============================================================
+✓ Success: grounded_effective=False, citations=0, anchored=0, evidence_unavailable=False
+
+============================================================
+Testing: vertex_tech_news_grounded
+Query: What are the most important technology breakthroughs announced in 2024?...
+============================================================
+✓ Success: grounded_effective=True, citations=10, anchored=0, evidence_unavailable=False
+
+============================================================
+Testing: openai_covid_update_grounded
+Query: What is the current status of COVID-19 globally as of 2024?...
+============================================================
+✓ Success: grounded_effective=False, citations=0, anchored=0, evidence_unavailable=False
+
+============================================================
+Testing: vertex_covid_update_grounded
+Query: What is the current status of COVID-19 globally as of 2024?...
+============================================================
+✓ Success: grounded_effective=True, citations=6, anchored=0, evidence_unavailable=False
+
+============================================================
+Testing: openai_ai_regulation_grounded
+Query: What new AI regulations were passed in the EU and US in 2024?...
+============================================================
+✓ Success: grounded_effective=False, citations=0, anchored=0, evidence_unavailable=False
+
+============================================================
+Testing: vertex_ai_regulation_grounded
+Query: What new AI regulations were passed in the EU and US in 2024?...
+============================================================
+✓ Success: grounded_effective=True, citations=10, anchored=0, evidence_unavailable=False
+
+============================================================
+Testing: openai_future_test_grounded
+Query: What will be the major technology breakthroughs in 2030?...
+============================================================
+✓ Success: grounded_effective=False, citations=0, anchored=0, evidence_unavailable=False
+
+============================================================
+Testing: vertex_future_test_grounded
+Query: What will be the major technology breakthroughs in 2030?...
+============================================================
+✓ Success: grounded_effective=True, citations=10, anchored=0, evidence_unavailable=False
+
+================================================================================
+CITATION VALIDATION REPORT - 2025-09-01 23:32:46
+================================================================================
+
+## Results by Query
+
+
+### 2024_election
+Query: What were the key results of the 2024 US presidential election?...
+  openai   | Success: ✓ | Grounded: - | Citations: 0 | Anchored: 0 | Evidence Unavail: -
+  vertex   | Success: ✓ | Grounded: ✓ | Citations: 5 | Anchored: 0 | Evidence Unavail: -
+           | Citation 1: wikipedia.org...
+           | Citation 2: britannica.com...
+
+### openai_news
+Query: What are the latest developments from OpenAI in 2024?...
+  openai   | Success: ✓ | Grounded: - | Citations: 0 | Anchored: 0 | Evidence Unavail: -
+  vertex   | Success: ✓ | Grounded: ✓ | Citations: 10 | Anchored: 0 | Evidence Unavail: -
+           | Citation 1: openai.com...
+           | Citation 2: analyticsvidhya.com...
+
+### climate_2024
+Query: What were the major climate change events and agreements in 2024?...
+  openai   | Success: ✓ | Grounded: - | Citations: 0 | Anchored: 0 | Evidence Unavail: -
+  vertex   | Success: ✓ | Grounded: ✓ | Citations: 10 | Anchored: 0 | Evidence Unavail: -
+           | Citation 1: ecowatch.com...
+           | Citation 2: wmo.int...
+
+### tech_news
+Query: What are the most important technology breakthroughs announced in 2024?...
+  openai   | Success: ✓ | Grounded: - | Citations: 0 | Anchored: 0 | Evidence Unavail: -
+  vertex   | Success: ✓ | Grounded: ✓ | Citations: 10 | Anchored: 0 | Evidence Unavail: -
+           | Citation 1: technologymagazine.com...
+           | Citation 2: tekleaders.com...
+
+### covid_update
+Query: What is the current status of COVID-19 globally as of 2024?...
+  openai   | Success: ✓ | Grounded: - | Citations: 0 | Anchored: 0 | Evidence Unavail: -
+  vertex   | Success: ✓ | Grounded: ✓ | Citations: 6 | Anchored: 0 | Evidence Unavail: -
+           | Citation 1: reliefweb.int...
+           | Citation 2: who.int...
+
+### ai_regulation
+Query: What new AI regulations were passed in the EU and US in 2024?...
+  openai   | Success: ✓ | Grounded: - | Citations: 0 | Anchored: 0 | Evidence Unavail: -
+  vertex   | Success: ✓ | Grounded: ✓ | Citations: 10 | Anchored: 0 | Evidence Unavail: -
+           | Citation 1: europa.eu...
+           | Citation 2: sidley.com...
+
+### future_test
+Query: What will be the major technology breakthroughs in 2030?...
+  openai   | Success: ✓ | Grounded: - | Citations: 0 | Anchored: 0 | Evidence Unavail: -
+  vertex   | Success: ✓ | Grounded: ✓ | Citations: 10 | Anchored: 0 | Evidence Unavail: -
+           | Citation 1: medium.com...
+           | Citation 2: analyticsinsight.net...
+
+## Summary Statistics
+
+Total Tests: 14
+Successful: 14/14 (100.0%)
+Grounded Effective: 7/14 (50.0%)
+With Citations: 7/14 (50.0%)
+With Anchored Citations: 0/14 (0.0%)
+Evidence Unavailable: 0/14 (0.0%)
+
+## By Vendor
+
+openai: 7/7 successful, 0 with citations, 0 with anchored
+vertex: 7/7 successful, 7 with citations, 0 with anchored
+
+## Citation Status Reasons
+
+  None: 14
+
+## Raw results saved to: citation_validation_results_20250901_233246.json

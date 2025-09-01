@@ -227,12 +227,52 @@ export CITATION_EXTRACTOR_ENABLE_LEGACY=true
 
 5. **ALS HMAC** - Deferred per user request (not a priority)
 
+## Phase 2 Improvements - September 1, 2025 (Evening Session 2)
+
+### Based on ChatGPT's Comprehensive Review
+
+#### 1. Tool Call Count Threading
+**Implemented**: Pass `tool_call_count` from grounding detection to citation extractor
+- More reliable detection of tool usage than checking function_call parts
+- Enables proper unlinked emission when `CITATION_EXTRACTOR_EMIT_UNLINKED=true`
+- Falls back to part detection if tool_call_count not provided
+
+#### 2. Refined Citation Status Reasons  
+**Implemented**: New status codes for better diagnostics
+- `provider_returned_empty_evidence` - When grounding_chunks array is empty
+- `citations_missing_despite_tool_calls` - When extraction issue suspected
+- Helps distinguish provider issues from code bugs
+
+#### 3. Enhanced Citations Audit
+**Implemented**: Sample data in audit when tools>0 but citations=0
+- Includes first 2 items from non-empty arrays (sanitized)
+- Shows structure of grounding_chunks (has_web, has_uri flags)
+- Truncates web_search_queries to 50 chars for privacy
+
+#### 4. Grounded Evidence Unavailable Flag
+**Implemented**: New telemetry flag `grounded_evidence_unavailable`
+- Set when `grounded_effective=true` but `anchored_citations_count=0`
+- Helps with alerting and analytics in AUTO mode
+- REQUIRED mode still fails-closed (unchanged)
+
+#### 5. Current/Past Query Testing
+**Implemented**: New test suite with real-world queries
+- Tests show Vertex returns 5-10 unlinked sources for current events
+- Confirms citation extraction works when evidence is available
+- Reveals that Gemini provides unlinked sources, not anchored citations
+
+### Key Findings from Current Event Testing
+- **OpenAI**: Still doesn't support web_search tools (expected)
+- **Vertex**: Returns citations but all as **unlinked sources**
+- Citation extraction IS working correctly
+- The issue is Gemini's response format, not our code
+
 ## Future Improvements
-1. Consider caching citation extraction results
+1. Consider enabling `CITATION_EXTRACTOR_EMIT_UNLINKED=true` for QA/staging
 2. Add retry logic for empty grounding results
 3. Implement citation quality scoring
 4. Add per-model grounding effectiveness metrics
-5. Telemetry shape consistency across adapters
+5. Investigate why Gemini returns only unlinked sources (no anchored spans)
 
 ## References
 - Original issue: Citation extraction showing 0 despite tool calls
