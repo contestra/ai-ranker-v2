@@ -10,13 +10,15 @@ OPENAI_ALLOWED_MODELS = {
     "gpt-4-turbo-2024-04-09",
     "gpt-4o",
     "gpt-4o-mini",
-    "gpt-5",  # Current name in use
-    "gpt-5-chat-latest",  # Canonical name per spec
+    "gpt-5",  # Primary GPT-5 model (reasoning)
+    "gpt-5-mini",  # Smaller GPT-5 variant
+    "gpt-5-nano",  # Smallest GPT-5 variant
+    "gpt-5-chat-latest",  # Non-reasoning chat variant
     "gpt-5-2025-08-07"  # Specific GPT-5 version
 }
 
 # Default OpenAI model
-OPENAI_DEFAULT_MODEL = "gpt-5-chat-latest"
+OPENAI_DEFAULT_MODEL = "gpt-5"  # Use reasoning model as default
 
 # Vertex/Gemini models - Default allowed models via Vertex
 # Can be overridden via ALLOWED_VERTEX_MODELS env var
@@ -58,9 +60,7 @@ def normalize_model(vendor: str, model: str = None) -> str:
     if vendor == "openai":
         if not model:
             return OPENAI_DEFAULT_MODEL
-        # Map gpt-5 to canonical name
-        if model == "gpt-5":
-            return "gpt-5-chat-latest"
+        # No remapping - use model as specified
         return model
     
     elif vendor == "vertex":

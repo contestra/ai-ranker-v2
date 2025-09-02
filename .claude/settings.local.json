@@ -7,7 +7,12 @@
       "Bash(git push:*)",
       "Bash(chmod:*)",
       "Bash(python:*)",
-      "Bash(source:*)"
+      "Bash(source:*)",
+      "Bash(grep:*)",
+      "Bash(timeout 30 python3 test_gpt5_direct_responses.py)",
+      "Bash(timeout 120 python3 test_gpt5_citations.py)",
+      "Bash(timeout 120 python3 test_gpt5_direct_responses.py)",
+      "Bash(timeout 120 python3 test_gpt5_complete_response.py)"
     ],
     "deny": [],
     "ask": [],
