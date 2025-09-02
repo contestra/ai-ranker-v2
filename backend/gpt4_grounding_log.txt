@@ -1,0 +1,125 @@
+[LLM_TIMEOUT] {"vendor": "openai", "model": "gpt-5-chat-latest", "vantage_policy": "NONE", "proxy_mode": "disabled", "country": "none", "grounded": true, "max_tokens": 200, "timeouts_s": {"connect": 2.0, "read": 120.0, "total": 122.0}, "error_type": "error", "error_msg": "Error code: 400 - {'error': {'message': \"Hosted tool 'web_search_preview' is not supported with gpt-5-chat-latest.\", 'type': 'invalid_request_error', 'param': 'tools', 'code': None}}"}
+[TOOL_FALLBACK] Both tool types unsupported for gpt-5-chat-latest
+Grounding not supported for gpt-5-chat-latest, proceeding without
+======================================================================
+GPT-4 vs GPT-5 Grounding Comparison Test
+======================================================================
+
+Objective: Determine if grounding issues affect all OpenAI models
+Testing models: gpt-4-turbo, gpt-4-turbo-2024-04-09, gpt-4o, gpt-4o-mini, gpt-4, gpt-5
+Test prompt: 'What are the latest developments in AI regulation ...'
+
+======================================================================
+TESTING AUTO MODE
+======================================================================
+
+======================================================================
+Testing: gpt-4-turbo
+Grounding Mode: AUTO
+======================================================================
+❌ Model not allowed: gpt-4-turbo
+  Error type: ValueError
+
+======================================================================
+Testing: gpt-4-turbo-2024-04-09
+Grounding Mode: AUTO
+======================================================================
+❌ Model not allowed: gpt-4-turbo-2024-04-09
+  Error type: ValueError
+
+======================================================================
+Testing: gpt-4o
+Grounding Mode: AUTO
+======================================================================
+❌ Model not allowed: gpt-4o
+  Error type: ValueError
+
+======================================================================
+Testing: gpt-4o-mini
+Grounding Mode: AUTO
+======================================================================
+❌ Model not allowed: gpt-4o-mini
+  Error type: ValueError
+
+======================================================================
+Testing: gpt-4
+Grounding Mode: AUTO
+======================================================================
+❌ Model not allowed: gpt-4
+  Error type: ValueError
+
+======================================================================
+Testing: gpt-5
+Grounding Mode: AUTO
+======================================================================
+✅ Success
+  Model effective: None
+  Tool calls: 0
+  Grounded effective: False
+  Citations: 0
+  Reason: tool_not_invoked
+
+======================================================================
+TESTING REQUIRED MODE (for models that support grounding)
+======================================================================
+
+======================================================================
+Testing: gpt-4-turbo
+Grounding Mode: REQUIRED
+======================================================================
+❌ Model not allowed: gpt-4-turbo
+  Error type: ValueError
+
+======================================================================
+Testing: gpt-4-turbo-2024-04-09
+Grounding Mode: REQUIRED
+======================================================================
+❌ Model not allowed: gpt-4-turbo-2024-04-09
+  Error type: ValueError
+
+======================================================================
+Testing: gpt-4o
+Grounding Mode: REQUIRED
+======================================================================
+❌ Model not allowed: gpt-4o
+  Error type: ValueError
+
+======================================================================
+ANALYSIS
+======================================================================
+
+## Model Comparison Table
+
+| Model | Mode | Success | Tool Calls | Grounded | Citations | Issue |
+|-------|------|---------|------------|----------|-----------|-------|
+| gpt-4-turbo   | AUTO     | ❌ |     -      |    -     |     -     | Model not allowed |
+| gpt-4-turbo   | REQUIRED | ❌ |     -      |    -     |     -     | Model not allowed |
+| gpt-4-turbo-2024-04-09 | AUTO     | ❌ |     -      |    -     |     -     | Model not allowed |
+| gpt-4-turbo-2024-04-09 | REQUIRED | ❌ |     -      |    -     |     -     | Model not allowed |
+| gpt-4o        | AUTO     | ❌ |     -      |    -     |     -     | Model not allowed |
+| gpt-4o        | REQUIRED | ❌ |     -      |    -     |     -     | Model not allowed |
+| gpt-4o-mini   | AUTO     | ❌ |     -      |    -     |     -     | Model not allowed |
+| gpt-4         | AUTO     | ❌ |     -      |    -     |     -     | Model not allowed |
+| gpt-5         | AUTO     | ✅ |     0      |    ❌     |     0     | tool_not_invoked |
+
+## Summary
+
+✅ Models with working grounding (tool calls > 0): None
+⚠️ Models where grounding not supported: None
+🚫 Models not allowed: ['gpt-4-turbo', 'gpt-4-turbo-2024-04-09', 'gpt-4o', 'gpt-4o-mini', 'gpt-4']
+❌ Models that don't invoke tools: ['gpt-5']
+
+## Key Finding
+
+❌ NO OpenAI models successfully invoke grounding tools
+   This confirms it's an account-wide issue, not specific to GPT-5
+
+📁 Results saved to: gpt4_grounding_results_20250902_132859.json
+
+======================================================================
+RECOMMENDATION
+======================================================================
+
+🔴 The grounding issue affects ALL OpenAI models tested
+   This is an account-wide limitation, not model-specific
+   Action: Escalate to OpenAI with evidence that no models can use web_search tools

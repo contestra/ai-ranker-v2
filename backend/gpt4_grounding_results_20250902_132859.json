@@ -1,0 +1,115 @@
+{
+  "test_metadata": {
+    "timestamp": "20250902_132859",
+    "models_tested": [
+      "gpt-4-turbo",
+      "gpt-4-turbo-2024-04-09",
+      "gpt-4o",
+      "gpt-4o-mini",
+      "gpt-4",
+      "gpt-5"
+    ],
+    "prompt": "What are the latest developments in AI regulation and policy in 2024?\n\nAs of today (2025-09-02), include official source URLs."
+  },
+  "results": [
+    {
+      "model": "gpt-4-turbo",
+      "grounding_mode": "AUTO",
+      "timestamp": "2025-09-02T13:28:36.114119",
+      "success": false,
+      "error": "Model not allowed: gpt-4-turbo\nAllowed models: ['gpt-5', 'gpt-5-chat-latest']\nTo use this model:\n1. Add to ALLOWED_OPENAI_MODELS env var\n2. Redeploy service\nNote: We don't silently rewrite models (Adapter PRD)",
+      "error_type": "ValueError",
+      "model_not_allowed": true
+    },
+    {
+      "model": "gpt-4-turbo-2024-04-09",
+      "grounding_mode": "AUTO",
+      "timestamp": "2025-09-02T13:28:38.115502",
+      "success": false,
+      "error": "Model not allowed: gpt-4-turbo-2024-04-09\nAllowed models: ['gpt-5', 'gpt-5-chat-latest']\nTo use this model:\n1. Add to ALLOWED_OPENAI_MODELS env var\n2. Redeploy service\nNote: We don't silently rewrite models (Adapter PRD)",
+      "error_type": "ValueError",
+      "model_not_allowed": true
+    },
+    {
+      "model": "gpt-4o",
+      "grounding_mode": "AUTO",
+      "timestamp": "2025-09-02T13:28:40.117176",
+      "success": false,
+      "error": "Model not allowed: gpt-4o\nAllowed models: ['gpt-5', 'gpt-5-chat-latest']\nTo use this model:\n1. Add to ALLOWED_OPENAI_MODELS env var\n2. Redeploy service\nNote: We don't silently rewrite models (Adapter PRD)",
+      "error_type": "ValueError",
+      "model_not_allowed": true
+    },
+    {
+      "model": "gpt-4o-mini",
+      "grounding_mode": "AUTO",
+      "timestamp": "2025-09-02T13:28:42.118694",
+      "success": false,
+      "error": "Model not allowed: gpt-4o-mini\nAllowed models: ['gpt-5', 'gpt-5-chat-latest']\nTo use this model:\n1. Add to ALLOWED_OPENAI_MODELS env var\n2. Redeploy service\nNote: We don't silently rewrite models (Adapter PRD)",
+      "error_type": "ValueError",
+      "model_not_allowed": true
+    },
+    {
+      "model": "gpt-4",
+      "grounding_mode": "AUTO",
+      "timestamp": "2025-09-02T13:28:44.119735",
+      "success": false,
+      "error": "Model not allowed: gpt-4\nAllowed models: ['gpt-5', 'gpt-5-chat-latest']\nTo use this model:\n1. Add to ALLOWED_OPENAI_MODELS env var\n2. Redeploy service\nNote: We don't silently rewrite models (Adapter PRD)",
+      "error_type": "ValueError",
+      "model_not_allowed": true
+    },
+    {
+      "model": "gpt-5",
+      "grounding_mode": "AUTO",
+      "timestamp": "2025-09-02T13:28:46.121058",
+      "success": true,
+      "content_snippet": "{\"web_search\":[{\"query\":\"AI regulation policy 2024 site:.gov OR site:.eu OR site:parliament.uk OR site:europa.eu OR site:oecd.org\"}]}{\"web_search\":[{\"query\":\"AI regulation 2024 updates official government EU US UK OECD\"}]}{\"response\":\"Here are the latest major developments in AI regulation and polic",
+      "telemetry": {
+        "model_requested": "gpt-5",
+        "model_effective": null,
+        "model_normalized": null,
+        "model_adjusted": false,
+        "response_api": "responses_http",
+        "tool_type_sent": "web_search",
+        "tool_choice": null,
+        "grounding_attempted": true,
+        "grounded_effective": false,
+        "grounding_not_supported": true,
+        "tool_call_count": 0,
+        "tool_result_count": 0,
+        "citations_total": 0,
+        "anchored_citations": 0,
+        "unlinked_sources": 0,
+        "why_not_grounded": "tool_not_invoked",
+        "error_message": null
+      },
+      "cached_tool_type": null
+    },
+    {
+      "model": "gpt-4-turbo",
+      "grounding_mode": "REQUIRED",
+      "timestamp": "2025-09-02T13:28:53.359475",
+      "success": false,
+      "error": "Model not allowed: gpt-4-turbo\nAllowed models: ['gpt-5', 'gpt-5-chat-latest']\nTo use this model:\n1. Add to ALLOWED_OPENAI_MODELS env var\n2. Redeploy service\nNote: We don't silently rewrite models (Adapter PRD)",
+      "error_type": "ValueError",
+      "model_not_allowed": true
+    },
+    {
+      "model": "gpt-4-turbo-2024-04-09",
+      "grounding_mode": "REQUIRED",
+      "timestamp": "2025-09-02T13:28:55.361299",
+      "success": false,
+      "error": "Model not allowed: gpt-4-turbo-2024-04-09\nAllowed models: ['gpt-5', 'gpt-5-chat-latest']\nTo use this model:\n1. Add to ALLOWED_OPENAI_MODELS env var\n2. Redeploy service\nNote: We don't silently rewrite models (Adapter PRD)",
+      "error_type": "ValueError",
+      "model_not_allowed": true
+    },
+    {
+      "model": "gpt-4o",
+      "grounding_mode": "REQUIRED",
+      "timestamp": "2025-09-02T13:28:57.363194",
+      "success": false,
+      "error": "Model not allowed: gpt-4o\nAllowed models: ['gpt-5', 'gpt-5-chat-latest']\nTo use this model:\n1. Add to ALLOWED_OPENAI_MODELS env var\n2. Redeploy service\nNote: We don't silently rewrite models (Adapter PRD)",
+      "error_type": "ValueError",
+      "model_not_allowed": true
+    }
+  ]
+}

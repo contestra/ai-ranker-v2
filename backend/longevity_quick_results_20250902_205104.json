@@ -1,0 +1,70 @@
+{
+  "timestamp": "20250902_205104",
+  "prompt": "What was the most interesting longevity and healthspan extension news during August 2025?",
+  "results": [
+    {
+      "config": "gpt-5-2025-08-07/US/grounded/no-ALS",
+      "success": true,
+      "grounded_effective": false,
+      "tool_used": false,
+      "tool_type": "web_search_preview_2025_03_11",
+      "citations": 0
+    },
+    {
+      "config": "gpt-5-2025-08-07/US/ungrounded/no-ALS",
+      "success": true,
+      "grounded_effective": false,
+      "tool_used": false,
+      "tool_type": null,
+      "citations": 0
+    },
+    {
+      "config": "gpt-5-2025-08-07/DE/grounded/no-ALS",
+      "success": true,
+      "grounded_effective": false,
+      "tool_used": false,
+      "tool_type": "web_search_preview_2025_03_11",
+      "citations": 0
+    },
+    {
+      "config": "gpt-5-2025-08-07/US/grounded/ALS",
+      "success": true,
+      "grounded_effective": false,
+      "tool_used": false,
+      "tool_type": "web_search_preview_2025_03_11",
+      "citations": 0
+    },
+    {
+      "config": "gpt-4o/US/grounded/no-ALS",
+      "success": true,
+      "grounded_effective": false,
+      "tool_used": false,
+      "tool_type": "web_search_preview_2025_03_11",
+      "citations": 0
+    },
+    {
+      "config": "gpt-4o/US/ungrounded/no-ALS",
+      "success": true,
+      "grounded_effective": false,
+      "tool_used": false,
+      "tool_type": null,
+      "citations": 0
+    },
+    {
+      "config": "gpt-4o/DE/grounded/no-ALS",
+      "success": true,
+      "grounded_effective": true,
+      "tool_used": false,
+      "tool_type": "web_search_preview_2025_03_11",
+      "citations": 0
+    },
+    {
+      "config": "gpt-4o/US/grounded/ALS",
+      "success": true,
+      "grounded_effective": false,
+      "tool_used": false,
+      "tool_type": "web_search_preview_2025_03_11",
+      "citations": 0
+    }
+  ]
+}

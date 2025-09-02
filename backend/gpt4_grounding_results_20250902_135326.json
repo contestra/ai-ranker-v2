@@ -1,0 +1,160 @@
+{
+  "test_metadata": {
+    "timestamp": "20250902_135326",
+    "models_tested": [
+      "gpt-4-turbo",
+      "gpt-4-turbo-2024-04-09",
+      "gpt-4o",
+      "gpt-4o-mini",
+      "gpt-4",
+      "gpt-5"
+    ],
+    "prompt": "What are the latest developments in AI regulation and policy in 2024?\n\nAs of today (2025-09-02), include official source URLs."
+  },
+  "results": [
+    {
+      "model": "gpt-4-turbo",
+      "grounding_mode": "AUTO",
+      "timestamp": "2025-09-02T13:53:08.152996",
+      "success": true,
+      "content_snippet": "",
+      "telemetry": {
+        "model_requested": "gpt-4-turbo",
+        "model_effective": null,
+        "tool_call_count": 0,
+        "grounded_effective": false,
+        "citations_total": 0,
+        "anchored_citations": 0,
+        "why_not_grounded": "no_metadata"
+      }
+    },
+    {
+      "model": "gpt-4-turbo-2024-04-09",
+      "grounding_mode": "AUTO",
+      "timestamp": "2025-09-02T13:53:10.154776",
+      "success": true,
+      "content_snippet": "",
+      "telemetry": {
+        "model_requested": "gpt-4-turbo-2024-04-09",
+        "model_effective": null,
+        "tool_call_count": 0,
+        "grounded_effective": false,
+        "citations_total": 0,
+        "anchored_citations": 0,
+        "why_not_grounded": "no_metadata"
+      }
+    },
+    {
+      "model": "gpt-4o",
+      "grounding_mode": "AUTO",
+      "timestamp": "2025-09-02T13:53:12.156746",
+      "success": true,
+      "content_snippet": "",
+      "telemetry": {
+        "model_requested": "gpt-4o",
+        "model_effective": null,
+        "tool_call_count": 0,
+        "grounded_effective": false,
+        "citations_total": 0,
+        "anchored_citations": 0,
+        "why_not_grounded": "no_metadata"
+      }
+    },
+    {
+      "model": "gpt-4o-mini",
+      "grounding_mode": "AUTO",
+      "timestamp": "2025-09-02T13:53:14.158817",
+      "success": true,
+      "content_snippet": "",
+      "telemetry": {
+        "model_requested": "gpt-4o-mini",
+        "model_effective": null,
+        "tool_call_count": 0,
+        "grounded_effective": false,
+        "citations_total": 0,
+        "anchored_citations": 0,
+        "why_not_grounded": "no_metadata"
+      }
+    },
+    {
+      "model": "gpt-4",
+      "grounding_mode": "AUTO",
+      "timestamp": "2025-09-02T13:53:16.160230",
+      "success": true,
+      "content_snippet": "",
+      "telemetry": {
+        "model_requested": "gpt-4",
+        "model_effective": null,
+        "tool_call_count": 0,
+        "grounded_effective": false,
+        "citations_total": 0,
+        "anchored_citations": 0,
+        "why_not_grounded": "no_metadata"
+      }
+    },
+    {
+      "model": "gpt-5",
+      "grounding_mode": "AUTO",
+      "timestamp": "2025-09-02T13:53:18.162134",
+      "success": true,
+      "content_snippet": "",
+      "telemetry": {
+        "model_requested": "gpt-5",
+        "model_effective": null,
+        "tool_call_count": 0,
+        "grounded_effective": false,
+        "citations_total": 0,
+        "anchored_citations": 0,
+        "why_not_grounded": "no_metadata"
+      }
+    },
+    {
+      "model": "gpt-4-turbo",
+      "grounding_mode": "REQUIRED",
+      "timestamp": "2025-09-02T13:53:20.164320",
+      "success": true,
+      "content_snippet": "",
+      "telemetry": {
+        "model_requested": "gpt-4-turbo",
+        "model_effective": null,
+        "tool_call_count": 0,
+        "grounded_effective": false,
+        "citations_total": 0,
+        "anchored_citations": 0,
+        "why_not_grounded": "no_metadata"
+      }
+    },
+    {
+      "model": "gpt-4-turbo-2024-04-09",
+      "grounding_mode": "REQUIRED",
+      "timestamp": "2025-09-02T13:53:22.166455",
+      "success": true,
+      "content_snippet": "",
+      "telemetry": {
+        "model_requested": "gpt-4-turbo-2024-04-09",
+        "model_effective": null,
+        "tool_call_count": 0,
+        "grounded_effective": false,
+        "citations_total": 0,
+        "anchored_citations": 0,
+        "why_not_grounded": "no_metadata"
+      }
+    },
+    {
+      "model": "gpt-4o",
+      "grounding_mode": "REQUIRED",
+      "timestamp": "2025-09-02T13:53:24.168668",
+      "success": true,
+      "content_snippet": "",
+      "telemetry": {
+        "model_requested": "gpt-4o",
+        "model_effective": null,
+        "tool_call_count": 0,
+        "grounded_effective": false,
+        "citations_total": 0,
+        "anchored_citations": 0,
+        "why_not_grounded": "no_metadata"
+      }
+    }
+  ]
+}

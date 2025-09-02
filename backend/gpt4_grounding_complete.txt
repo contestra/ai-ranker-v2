@@ -1,0 +1,163 @@
+Adapter failed for vendor=openai: OPENAI_API_KEY required - set in backend/.env
+Adapter failed for vendor=openai: OPENAI_API_KEY required - set in backend/.env
+Adapter failed for vendor=openai: OPENAI_API_KEY required - set in backend/.env
+Adapter failed for vendor=openai: OPENAI_API_KEY required - set in backend/.env
+Adapter failed for vendor=openai: OPENAI_API_KEY required - set in backend/.env
+Adapter failed for vendor=openai: OPENAI_API_KEY required - set in backend/.env
+Adapter failed for vendor=openai: OPENAI_API_KEY required - set in backend/.env
+Adapter failed for vendor=openai: OPENAI_API_KEY required - set in backend/.env
+Adapter failed for vendor=openai: OPENAI_API_KEY required - set in backend/.env
+======================================================================
+GPT-4 vs GPT-5 Grounding Comparison Test
+======================================================================
+
+Objective: Determine if grounding issues affect all OpenAI models
+Testing models: gpt-4-turbo, gpt-4-turbo-2024-04-09, gpt-4o, gpt-4o-mini, gpt-4, gpt-5
+Test prompt: 'What are the latest developments in AI regulation ...'
+
+======================================================================
+TESTING AUTO MODE
+======================================================================
+
+======================================================================
+Testing: gpt-4-turbo
+Grounding Mode: AUTO
+======================================================================
+✅ Success
+  Model effective: None
+  Tool calls: 0
+  Grounded effective: False
+  Citations: 0
+  Reason: no_metadata
+
+======================================================================
+Testing: gpt-4-turbo-2024-04-09
+Grounding Mode: AUTO
+======================================================================
+✅ Success
+  Model effective: None
+  Tool calls: 0
+  Grounded effective: False
+  Citations: 0
+  Reason: no_metadata
+
+======================================================================
+Testing: gpt-4o
+Grounding Mode: AUTO
+======================================================================
+✅ Success
+  Model effective: None
+  Tool calls: 0
+  Grounded effective: False
+  Citations: 0
+  Reason: no_metadata
+
+======================================================================
+Testing: gpt-4o-mini
+Grounding Mode: AUTO
+======================================================================
+✅ Success
+  Model effective: None
+  Tool calls: 0
+  Grounded effective: False
+  Citations: 0
+  Reason: no_metadata
+
+======================================================================
+Testing: gpt-4
+Grounding Mode: AUTO
+======================================================================
+✅ Success
+  Model effective: None
+  Tool calls: 0
+  Grounded effective: False
+  Citations: 0
+  Reason: no_metadata
+
+======================================================================
+Testing: gpt-5
+Grounding Mode: AUTO
+======================================================================
+✅ Success
+  Model effective: None
+  Tool calls: 0
+  Grounded effective: False
+  Citations: 0
+  Reason: no_metadata
+
+======================================================================
+TESTING REQUIRED MODE (for models that support grounding)
+======================================================================
+
+======================================================================
+Testing: gpt-4-turbo
+Grounding Mode: REQUIRED
+======================================================================
+✅ Success
+  Model effective: None
+  Tool calls: 0
+  Grounded effective: False
+  Citations: 0
+  Reason: no_metadata
+
+======================================================================
+Testing: gpt-4-turbo-2024-04-09
+Grounding Mode: REQUIRED
+======================================================================
+✅ Success
+  Model effective: None
+  Tool calls: 0
+  Grounded effective: False
+  Citations: 0
+  Reason: no_metadata
+
+======================================================================
+Testing: gpt-4o
+Grounding Mode: REQUIRED
+======================================================================
+✅ Success
+  Model effective: None
+  Tool calls: 0
+  Grounded effective: False
+  Citations: 0
+  Reason: no_metadata
+
+======================================================================
+ANALYSIS
+======================================================================
+
+## Model Comparison Table
+
+| Model | Mode | Success | Tool Calls | Grounded | Citations | Issue |
+|-------|------|---------|------------|----------|-----------|-------|
+| gpt-4-turbo   | AUTO     | ✅ |     0      |    ❌     |     0     | no_metadata |
+| gpt-4-turbo   | REQUIRED | ✅ |     0      |    ❌     |     0     | no_metadata |
+| gpt-4-turbo-2024-04-09 | AUTO     | ✅ |     0      |    ❌     |     0     | no_metadata |
+| gpt-4-turbo-2024-04-09 | REQUIRED | ✅ |     0      |    ❌     |     0     | no_metadata |
+| gpt-4o        | AUTO     | ✅ |     0      |    ❌     |     0     | no_metadata |
+| gpt-4o        | REQUIRED | ✅ |     0      |    ❌     |     0     | no_metadata |
+| gpt-4o-mini   | AUTO     | ✅ |     0      |    ❌     |     0     | no_metadata |
+| gpt-4         | AUTO     | ✅ |     0      |    ❌     |     0     | no_metadata |
+| gpt-5         | AUTO     | ✅ |     0      |    ❌     |     0     | no_metadata |
+
+## Summary
+
+✅ Models with working grounding (tool calls > 0): None
+⚠️ Models where grounding not supported: None
+🚫 Models not allowed: None
+❌ Models that don't invoke tools: ['gpt-4-turbo', 'gpt-4-turbo-2024-04-09', 'gpt-4o', 'gpt-4o-mini', 'gpt-4', 'gpt-5']
+
+## Key Finding
+
+❌ NO OpenAI models successfully invoke grounding tools
+   This confirms it's an account-wide issue, not specific to GPT-5
+
+📁 Results saved to: gpt4_grounding_results_20250902_135326.json
+
+======================================================================
+RECOMMENDATION
+======================================================================
+
+🔴 The grounding issue affects ALL OpenAI models tested
+   This is an account-wide limitation, not model-specific
+   Action: Escalate to OpenAI with evidence that no models can use web_search tools

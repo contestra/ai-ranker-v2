@@ -17,9 +17,9 @@ Ran 16 test combinations across 2 models (GPT-5 and Gemini-2.5-pro) with variati
 #### GPT-5 (OpenAI)
 - **Success Rate**: 8/8 (100%)
 - **Grounding Effective**: 0/4 (0%)
-- **Issue**: Web search tool not supported for `gpt-5-chat-latest` model
-- **Error Message**: "Hosted tool 'web_search_preview' is not supported with gpt-5-chat-latest"
-- **Fallback Behavior**: Model proceeds without grounding when requested
+- **Issue**: Models not invoking web_search tools despite proper attachment
+- **OpenAI Support Confirmation**: OpenAI has verified the account has web_search enabled and there are no issues on their end
+- **Root Cause**: Adapter implementation issue - grounding instructions in system message are being ignored by models
 
 #### Gemini-2.5-pro (Vertex)
 - **Success Rate**: 4/8 (50%)
@@ -92,10 +92,11 @@ Despite citation issues, both models generated substantive responses:
    - Add comprehensive logging to understand actual grounding metadata format
    - Test with direct SDK calls to verify citation structure
 
-2. **OpenAI Grounding Support**:
-   - Investigate alternative models that support web_search tool
-   - Consider using `gpt-4o` or other models with grounding capabilities
-   - Update allowed models list if needed
+2. **OpenAI Grounding Fix (Confirmed by OpenAI Support)**:
+   - OpenAI confirmed web_search is enabled and working on the account
+   - The issue is in our adapter code, NOT an OpenAI limitation
+   - Solution: Move grounding instructions from system message to user message for better visibility
+   - Make tool usage instructions more explicit and prominent
 
 3. **Vertex Ungrounded Requests**:
    - Investigate why Gemini-2.5-pro fails without grounding

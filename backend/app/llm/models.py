@@ -5,8 +5,14 @@ Only these models are allowed in production.
 
 # OpenAI models - Responses API only
 OPENAI_ALLOWED_MODELS = {
+    "gpt-4",
+    "gpt-4-turbo",
+    "gpt-4-turbo-2024-04-09",
+    "gpt-4o",
+    "gpt-4o-mini",
     "gpt-5",  # Current name in use
-    "gpt-5-chat-latest"  # Canonical name per spec
+    "gpt-5-chat-latest",  # Canonical name per spec
+    "gpt-5-2025-08-07"  # Specific GPT-5 version
 }
 
 # Default OpenAI model
@@ -25,7 +31,7 @@ VERTEX_DEFAULT_MODEL = "publishers/google/models/gemini-2.5-pro"
 # Model validation messages
 MODEL_NOT_ALLOWED_MESSAGES = {
     "vertex": "Only gemini-2.5-pro and gemini-2.0-flash are supported by default. Configure via ALLOWED_VERTEX_MODELS env var.",
-    "openai": "Only gpt-5 and gpt-5-chat-latest are supported via Responses API."
+    "openai": "Model not supported via Responses API. Check OPENAI_ALLOWED_MODELS."
 }
 
 def validate_model(vendor: str, model: str) -> tuple[bool, str]:

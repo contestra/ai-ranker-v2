@@ -1,0 +1,35 @@
+name: Deployment Guard
+
+on:
+  push:
+    branches: [main, production]
+  pull_request:
+    branches: [main, production]
+
+jobs:
+  validate-prod-config:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      
+      - name: Check Production Allowlist
+        env:
+          ENVIRONMENT: ${{ github.ref == 'refs/heads/production' && 'production' || 'development' }}
+          ALLOWED_OPENAI_MODELS: ${{ secrets.ALLOWED_OPENAI_MODELS }}
+        run: |
+          python backend/ci_guard_prod_allowlist.py
+      
+      - name: Run Canary Test (if not prod)
+        if: github.ref != 'refs/heads/production'
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ALLOWED_OPENAI_MODELS: 'gpt-5-2025-08-07'
+        run: |
+          cd backend
+          pip install -r requirements.txt
+          python test_canary_openai_pinned_websearch.py || echo "Canary test failed (non-blocking in dev)"

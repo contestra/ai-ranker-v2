@@ -1,0 +1,39 @@
+{
+  "timestamp": "20250902_183414",
+  "results": [
+    {
+      "test": "test_pinning_prod_fails_non_pinned",
+      "passed": true,
+      "details": "Correctly rejected gpt-5-chat-latest with prod allowlist"
+    },
+    {
+      "test": "test_vendor_inference_pinned",
+      "passed": true,
+      "details": "Got vendor: openai for gpt-5-2025-08-07"
+    },
+    {
+      "test": "test_grounded_required_pass",
+      "passed": false,
+      "details": "Model didn't use grounding for recency prompt"
+    },
+    {
+      "test": "test_grounded_required_fail",
+      "passed": true,
+      "details": "Router correctly enforced REQUIRED mode for non-grounded response"
+    },
+    {
+      "test": "Temperature: gpt-5-2025-08-07 forces 1.0",
+      "passed": true,
+      "details": "Request completed (check logs for temperature override)"
+    },
+    {
+      "test": "test_no_remap_echo",
+      "passed": true,
+      "details": "Request: gpt-5-2025-08-07, Response: gpt-5-2025-08-07"
+    }
+  ],
+  "summary": {
+    "passed": 5,
+    "total": 6
+  }
+}

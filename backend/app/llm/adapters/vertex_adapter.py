@@ -46,6 +46,12 @@ DEBUG_GROUNDING = os.getenv("DEBUG_GROUNDING", "false").lower() == "true"
 # Default false to keep telemetry clean; can be enabled per-run via env.
 EMIT_UNLINKED_SOURCES = os.getenv("CITATION_EXTRACTOR_EMIT_UNLINKED", "false").lower() == "true"
 
+# Centralized citation type definitions
+# Router counts as anchored only JOIN/direct - text-anchored citations with specific spans
+# Chunks/supports are evidence but not text-anchored, so they count as unlinked
+ANCHORED_CITATION_TYPES = {"direct_uri", "v1_join"}
+UNLINKED_CITATION_TYPES = {"unlinked", "legacy", "text_harvest", "groundingChunks"}
+
 def _get_registrable_domain(url: str) -> str:
     """
     Extract registrable domain from URL.
@@ -248,10 +254,10 @@ def _select_and_extract_citations(resp, tenant_id: str = None, account_id: str =
     shape_set = set()
     
     for cit in citations:
-        # Count anchored vs unlinked
-        if cit.get("source_type") in ["direct_uri", "v1_join", "groundingChunks"]:
+        # Count anchored vs unlinked using centralized definitions
+        if cit.get("source_type") in ANCHORED_CITATION_TYPES:
             anchored_count += 1
-        elif cit.get("source_type") in ["unlinked", "legacy", "text_harvest"]:
+        elif cit.get("source_type") in UNLINKED_CITATION_TYPES:
             unlinked_count += 1
         
         # Track shape
@@ -736,8 +742,8 @@ def _extract_vertex_citations(resp, tool_call_count: int = 0) -> List[Dict]:
     
     # Enhanced forensics for tools>0 & citations==0
     tool_count = 0
-    # Use same anchored definition as telemetry for consistency
-    anchored_count = len([c for c in citations if c.get('source_type') in {'direct_uri', 'v1_join'}])
+    # Use centralized anchored definition for consistency
+    anchored_count = len([c for c in citations if c.get('source_type') in ANCHORED_CITATION_TYPES])
     
     # Count tool calls
     if hasattr(resp, 'candidates'):
