@@ -123,6 +123,16 @@ class Settings(BaseSettings):
         True,
         description="Master kill switch for citation extraction"
     )
+    
+    # Prompt Immutability Configuration
+    prompt_immutability: str = Field(
+        "STRICT",
+        description="Prompt immutability mode: STRICT (no modifications) or RELAXED (allow provoker lines)"
+    )
+    enable_grounding_nudges: bool = Field(
+        False,
+        description="Enable grounding instructions in prompts (deprecated, use post-hoc enforcement)"
+    )
 
     class Config:
         env_file = ".env"

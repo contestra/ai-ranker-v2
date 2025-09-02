@@ -1,0 +1,42 @@
+name: CI Guard - Vertex SDK Check
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'backend/app/llm/adapters/**'
+      - 'backend/app/llm/unified_llm_adapter.py'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'backend/app/llm/adapters/**'
+      - 'backend/app/llm/unified_llm_adapter.py'
+
+jobs:
+  check-vertex-sdk:
+    runs-on: ubuntu-latest
+    name: Check for Legacy Vertex SDK
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Run Vertex SDK Guard
+      run: |
+        cd backend
+        python ci_guard_vertex_sdk.py
+      
+    - name: Report Status
+      if: always()
+      run: |
+        if [ $? -eq 0 ]; then
+          echo "✅ No legacy Vertex SDK imports found"
+        else
+          echo "❌ Legacy Vertex SDK imports detected - build failed"
+          echo "Please use only google-genai client as per PRD-Adapter-Layer-V1 (Phase-0)"
+          exit 1
+        fi

@@ -1100,38 +1100,49 @@ class OpenAIAdapter:
                 else:
                     logger.debug(f"[TOOL_CHOICE] Using tool_choice=auto for mode={grounding_mode}")
             
-            # Add guardrail instruction to ensure final message after tools
-            max_web_searches = int(os.getenv("OPENAI_MAX_WEB_SEARCHES", "2"))
-            
-            # Different instruction for JSON vs plain text mode
-            if request.json_mode:
-                # JSON mode: instruct to return valid JSON object
-                grounding_instruction = (
-                    "If the question refers to information after your knowledge cutoff or uses recency terms "
-                    "like 'today', 'yesterday', 'this week', 'this month', 'latest', 'right now', 'currently', "
-                    "'as of', 'this morning', 'this afternoon', 'this evening', or 'breaking', you MUST call the "
-                    "web_search tool at least once before answering. After finishing any tool calls (limit: "
-                    f"{max_web_searches} web searches), you MUST produce a final assistant message containing "
-                    "a single, valid JSON object that answers the user request. Do not output prose or "
-                    "explanations outside the JSON."
-                )
+            # PROMPT PURITY: Do not add grounding instructions to prompts
+            # All grounding enforcement happens post-hoc at the adapter/router level
+            # Only add grounding nudges if explicitly enabled (deprecated)
+            if settings.enable_grounding_nudges:
+                # Legacy behavior - deprecated, will be removed
+                max_web_searches = int(os.getenv("OPENAI_MAX_WEB_SEARCHES", "2"))
+                
+                # Different instruction for JSON vs plain text mode
+                if request.json_mode:
+                    # JSON mode: instruct to return valid JSON object
+                    grounding_instruction = (
+                        "If the question refers to information after your knowledge cutoff or uses recency terms "
+                        "like 'today', 'yesterday', 'this week', 'this month', 'latest', 'right now', 'currently', "
+                        "'as of', 'this morning', 'this afternoon', 'this evening', or 'breaking', you MUST call the "
+                        "web_search tool at least once before answering. After finishing any tool calls (limit: "
+                        f"{max_web_searches} web searches), you MUST produce a final assistant message containing "
+                        "a single, valid JSON object that answers the user request. Do not output prose or "
+                        "explanations outside the JSON."
+                    )
+                else:
+                    # Plain text mode: existing instruction
+                    grounding_instruction = (
+                        "If the question refers to information after your knowledge cutoff or uses recency terms "
+                        "like 'today', 'yesterday', 'this week', 'this month', 'latest', 'right now', 'currently', "
+                        "'as of', 'this morning', 'this afternoon', 'this evening', or 'breaking', you MUST call the "
+                        "web_search tool at least once before answering. Do not respond from memory and do not include "
+                        "knowledge-cutoff disclaimers when the tool is available. After finishing any tool calls, you "
+                        f"MUST produce one final assistant message in plain text. Use at most {max_web_searches} web "
+                        "searches and prefer primary/official sources. Include url_citation annotations in your final "
+                        "message for each distinct source you relied on."
+                    )
+                
+                if instructions:
+                    params["instructions"] = f"{instructions}\n\n{grounding_instruction}"
+                else:
+                    params["instructions"] = grounding_instruction
+                    
+                metadata["grounding_nudges_added"] = True
             else:
-                # Plain text mode: existing instruction
-                grounding_instruction = (
-                    "If the question refers to information after your knowledge cutoff or uses recency terms "
-                    "like 'today', 'yesterday', 'this week', 'this month', 'latest', 'right now', 'currently', "
-                    "'as of', 'this morning', 'this afternoon', 'this evening', or 'breaking', you MUST call the "
-                    "web_search tool at least once before answering. Do not respond from memory and do not include "
-                    "knowledge-cutoff disclaimers when the tool is available. After finishing any tool calls, you "
-                    f"MUST produce one final assistant message in plain text. Use at most {max_web_searches} web "
-                    "searches and prefer primary/official sources. Include url_citation annotations in your final "
-                    "message for each distinct source you relied on."
-                )
-            
-            if instructions:
-                params["instructions"] = f"{instructions}\n\n{grounding_instruction}"
-            else:
-                params["instructions"] = grounding_instruction
+                # PROMPT PURITY: Keep system message unmodified
+                if instructions:
+                    params["instructions"] = instructions
+                metadata["grounding_nudges_added"] = False
         
         # Determine if tools are attached (not necessarily used)
         # tools_attached: we attached OpenAI web_search on this call (not the same as "search actually happened")
@@ -1419,13 +1430,19 @@ class OpenAIAdapter:
                     logger.debug(f"[CITATIONS] OpenAI: Extracted {len(citations)} citations, "
                                f"{url_citation_count} from url_citation annotations")
             
-            # REQUIRED mode enforcement with distinction
-            # In REQUIRED mode, let router handle enforcement
-            # We just mark the metadata appropriately
+            # POST-HOC GROUNDING ENFORCEMENT for REQUIRED mode
+            # Prompt purity: enforcement happens here, not by modifying prompts
             if grounding_mode == "REQUIRED" and not grounded_effective:
+                # In REQUIRED mode, grounding MUST be effective or we fail
+                error_msg = (
+                    f"REQUIRED grounding mode specified but no grounding evidence found. "
+                    f"Tool calls: {tool_call_count}, Web searches: {web_search_count}. "
+                    f"Response must include web search results when REQUIRED mode is set."
+                )
+                logger.error(f"[OPENAI_GROUNDING] {error_msg}")
                 metadata["required_grounding_failed"] = True
-                metadata["router_will_enforce"] = True
-                logger.info(f"[OPENAI_GROUNDING] REQUIRED mode failed grounding, router will enforce")
+                # Raise error for strict enforcement
+                raise GroundingRequiredFailedError(error_msg)
         
         # Check if initial response had reasoning only
         if _had_reasoning_only(response):
