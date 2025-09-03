@@ -1,0 +1,27 @@
+[
+  {
+    "vendor": "openai",
+    "status": "\u2705 PASSED",
+    "response_length": 0,
+    "tool_calls": 0,
+    "citations": 0,
+    "anchored_citations": 0,
+    "coverage_pct": 0,
+    "retry_count": 0
+  },
+  {
+    "vendor": "gemini_direct",
+    "status": "\u2705 PASSED",
+    "response_length": 3661,
+    "chunks": 0,
+    "supports": 0,
+    "anchored_citations": 14,
+    "coverage_pct": 82.0540835837203,
+    "retry_count": 0
+  },
+  {
+    "vendor": "vertex",
+    "status": "\u274c FAILED",
+    "error": "name 'elapsed_ms' is not defined"
+  }
+]

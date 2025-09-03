@@ -390,7 +390,8 @@ class GeminiAdapter:
         return GenerateContentConfig(**cfg)
 
     async def complete(self, req: LLMRequest, timeout: int = 60) -> LLMResponse:
-        t0 = time.time()
+        # Use monotonic clock for accurate timing
+        t0 = time.perf_counter()
 
         # Validate using same allowlist family (vertex models)
         fq = req.model if str(req.model).startswith("publishers/google/models/") else f"publishers/google/models/{req.model}"
@@ -604,7 +605,7 @@ class GeminiAdapter:
             if is_json and not schema_valid:
                 raise ValueError(f"REQUIRED mode but no valid schema function call.")
 
-        metadata["response_time_ms"] = int((time.time() - t0) * 1000)
+        metadata["response_time_ms"] = int((time.perf_counter() - t0) * 1000)
         if hasattr(resp, "model_version"):
             metadata["modelVersion"] = resp.model_version
 

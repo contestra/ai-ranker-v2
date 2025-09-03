@@ -177,7 +177,8 @@ class OpenAIAdapter:
     
     async def complete(self, request: LLMRequest, timeout: int = 60) -> LLMResponse:
         """Complete with comprehensive timeout and hanging protection."""
-        start_time = time.time()
+        # Use monotonic clock for accurate timing
+        start_time = time.perf_counter()
         metadata = {
             "timestamp": datetime.utcnow().isoformat(),
             "vendor": "openai",
@@ -278,7 +279,7 @@ class OpenAIAdapter:
                 content = msg.content or ""
             
             # Build response
-            metadata["response_time_ms"] = int((time.time() - start_time) * 1000)
+            metadata["response_time_ms"] = int((time.perf_counter() - start_time) * 1000)
             metadata["grounded_effective"] = bool(tools)
             
             # Log ALS telemetry

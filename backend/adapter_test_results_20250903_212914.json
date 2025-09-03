@@ -1,0 +1,32 @@
+[
+  {
+    "vendor": "openai",
+    "status": "\u2705 PASSED",
+    "response_length": 0,
+    "tool_calls": 0,
+    "citations": 0,
+    "anchored_citations": 0,
+    "coverage_pct": 0,
+    "retry_count": 0
+  },
+  {
+    "vendor": "gemini_direct",
+    "status": "\u2705 PASSED",
+    "response_length": 3588,
+    "chunks": 0,
+    "supports": 0,
+    "anchored_citations": 14,
+    "coverage_pct": 81.27090301003345,
+    "retry_count": 0
+  },
+  {
+    "vendor": "vertex",
+    "status": "\u2705 PASSED",
+    "response_length": 4336,
+    "chunks": 0,
+    "supports": 0,
+    "anchored_citations": 15,
+    "coverage_pct": 74.83856088560886,
+    "retry_count": 0
+  }
+]

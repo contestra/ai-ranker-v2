@@ -10,7 +10,7 @@ import sys
 import time
 from pathlib import Path
 from datetime import datetime, timezone
-from typing import Dict, Any, Optional
+from typing import Any, Dict, List, Optional
 
 # Add parent to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -31,6 +31,43 @@ def get_timestamp() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def validate_timing(metadata: Dict[str, Any], vendor: str) -> List[str]:
+    """
+    Validate timing fields in metadata.
+    Returns list of validation errors (empty if all valid).
+    """
+    errors = []
+    
+    # Check response_time_ms exists and is valid
+    if "response_time_ms" not in metadata:
+        errors.append(f"{vendor}: Missing 'response_time_ms' field")
+    else:
+        rt = metadata["response_time_ms"]
+        if not isinstance(rt, (int, float)):
+            errors.append(f"{vendor}: response_time_ms not numeric: {type(rt)}")
+        elif rt < 0:
+            errors.append(f"{vendor}: response_time_ms negative: {rt}")
+        elif rt > 120000:  # More than 2 minutes is suspicious
+            errors.append(f"{vendor}: response_time_ms suspiciously high: {rt}ms")
+    
+    # Check for deprecated fields
+    if "elapsed_ms" in metadata:
+        errors.append(f"{vendor}: Using deprecated 'elapsed_ms' field")
+    
+    # If streaming, check TTFB
+    if "ttfb_ms" in metadata:
+        ttfb = metadata["ttfb_ms"]
+        rt = metadata.get("response_time_ms", 0)
+        if not isinstance(ttfb, (int, float)):
+            errors.append(f"{vendor}: ttfb_ms not numeric: {type(ttfb)}")
+        elif ttfb < 0:
+            errors.append(f"{vendor}: ttfb_ms negative: {ttfb}")
+        elif ttfb > rt:
+            errors.append(f"{vendor}: ttfb_ms ({ttfb}) > response_time_ms ({rt})")
+    
+    return errors
+
+
 def mask_api_key(key: Optional[str]) -> str:
     """Mask API key showing only last 4 chars."""
     if not key:
@@ -45,17 +82,25 @@ def check_adc_configured() -> bool:
     # Check for service account JSON
     if os.getenv("GOOGLE_APPLICATION_CREDENTIALS"):
         return True
-    # Check for gcloud auth
+    # Check for gcloud auth - more robust check
     try:
         import subprocess
         result = subprocess.run(
             ["gcloud", "auth", "application-default", "print-access-token"],
             capture_output=True,
-            timeout=2,
+            timeout=5,  # Increased timeout
             text=True
         )
-        return result.returncode == 0
+        # Check if we got a token (even if there are warnings)
+        return bool(result.stdout and result.stdout.strip())
     except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    # Also check if google.auth can get credentials
+    try:
+        import google.auth
+        credentials, project = google.auth.default()
+        return credentials is not None
+    except:
         pass
     return False
 
@@ -146,13 +191,22 @@ Units: metric
         duration_ms = int((time.monotonic() - start_time) * 1000)
         print(f"[{get_timestamp()}] OpenAI adapter returned. duration={duration_ms}ms", flush=True)
         
+        # Check grounding and ALS position
+        metadata = response.metadata or {}
+        
+        # Validate timing fields
+        timing_errors = validate_timing(metadata, "openai")
+        if timing_errors:
+            print(f"\n⚠️ TIMING VALIDATION ERRORS:")
+            for error in timing_errors:
+                print(f"  - {error}")
+        
         print(f"\n✅ SUCCESS - OpenAI adapter responded")
         print(f"📄 Response length: {len(response.content or '')} chars")
         
-        # Check grounding and ALS position
-        metadata = response.metadata or {}
         als_position = metadata.get('als_position', 'unknown')
         print(f"📍 ALS position: {als_position}")
+        print(f"⏱️ Response time: {metadata.get('response_time_ms', 'N/A')}ms")
         
         print(f"\n📊 Grounding Metrics:")
         # Use actual metadata keys
@@ -284,13 +338,22 @@ Units: metric
         duration_ms = int((time.monotonic() - start_time) * 1000)
         print(f"[{get_timestamp()}] Gemini adapter returned. duration={duration_ms}ms", flush=True)
         
+        # Check grounding and ALS position
+        metadata = response.metadata or {}
+        
+        # Validate timing fields
+        timing_errors = validate_timing(metadata, "gemini")
+        if timing_errors:
+            print(f"\n⚠️ TIMING VALIDATION ERRORS:")
+            for error in timing_errors:
+                print(f"  - {error}")
+        
         print(f"\n✅ SUCCESS - Gemini adapter responded")
         print(f"📄 Response length: {len(response.content or '')} chars")
         
-        # Check grounding and ALS position
-        metadata = response.metadata or {}
         als_position = metadata.get('als_position', 'unknown')
         print(f"📍 ALS position: {als_position}")
+        print(f"⏱️ Response time: {metadata.get('response_time_ms', 'N/A')}ms")
         
         print(f"\n📊 Grounding Metrics:")
         # Use actual metadata keys
@@ -432,13 +495,22 @@ Units: metric
         duration_ms = int((time.monotonic() - start_time) * 1000)
         print(f"[{get_timestamp()}] Vertex adapter returned. duration={duration_ms}ms", flush=True)
         
+        # Check grounding and ALS position
+        metadata = response.metadata or {}
+        
+        # Validate timing fields
+        timing_errors = validate_timing(metadata, "vertex")
+        if timing_errors:
+            print(f"\n⚠️ TIMING VALIDATION ERRORS:")
+            for error in timing_errors:
+                print(f"  - {error}")
+        
         print(f"\n✅ SUCCESS - Vertex adapter responded")
         print(f"📄 Response length: {len(response.content or '')} chars")
         
-        # Check grounding and ALS position
-        metadata = response.metadata or {}
         als_position = metadata.get('als_position', 'unknown')
         print(f"📍 ALS position: {als_position}")
+        print(f"⏱️ Response time: {metadata.get('response_time_ms', 'N/A')}ms")
         
         print(f"\n📊 Grounding Metrics:")
         # Use actual metadata keys

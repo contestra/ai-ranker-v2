@@ -532,18 +532,13 @@ class VertexAdapter:
         Main entry point for Vertex adapter.
         Single-call FFC strategy for grounded + structured output.
         """
-        start_time = time.time()
+        # Use monotonic clock for accurate timing
+        start_time = time.perf_counter()
         
-        # Validate model
-        is_valid, error_msg = validate_model("vertex", req.model)
-        if not is_valid:
-            raise ValueError(f"Invalid model for Vertex: {error_msg}")
-        model_id = req.model
-        
-        # Initialize metadata
+        # Initialize metadata early for finally block
         metadata = {
             "provider": "vertex",
-            "model": model_id,
+            "model": req.model,
             "response_api": "vertex_genai",
             "provider_api_version": "vertex:genai-v1",
             "region": self.location,
@@ -552,284 +547,308 @@ class VertexAdapter:
             "tool_call_count": 0,
             "final_function_called": None,
             "schema_args_valid": False,
-            "why_not_grounded": None
+            "why_not_grounded": None,
+            "response_time_ms": 0  # Initialize timing field
         }
         
-        # Build exactly two messages
         try:
+            # Validate model
+            is_valid, error_msg = validate_model("vertex", req.model)
+            if not is_valid:
+                raise ValueError(f"Invalid model for Vertex: {error_msg}")
+            model_id = req.model
+            
+            # Build exactly two messages
             system_content, user_content = self._build_two_messages(req)
-        except ValueError as e:
-            logger.error(f"Message shape validation failed: {e}")
-            raise
-        
-        # Runtime assert: exactly 2 messages
-        message_count = sum([
-            1 if system_content else 0,
-            1 if user_content else 0
-        ])
-        assert message_count == 2, f"Expected exactly 2 messages, got {message_count}"
-        
-        # Check if grounding is requested
-        is_grounded = getattr(req, "grounded", False)
-        is_json_mode = getattr(req, "json_mode", False)
-        
-        # Extract grounding mode (AUTO or REQUIRED)
-        grounding_mode = getattr(req, "grounding_mode", "AUTO")
-        if hasattr(req, "meta") and isinstance(req.meta, dict):
-            grounding_mode = req.meta.get("grounding_mode", grounding_mode)
-        metadata["grounding_mode_requested"] = grounding_mode
-        
-        # Prepare model name for google-genai client
-        model_name = req.model
-        if not model_name.startswith("publishers/google/models/"):
-            model_name = f"publishers/google/models/{model_name}"
-        
-        # Prepare tools for FFC
-        tools = []
-        schema_function = None
-        tool_config = None
-        
-        if is_grounded or is_json_mode:
-            # Add GoogleSearch for grounding
-            if is_grounded:
-                tools.append(Tool(google_search=GoogleSearch()))
-                metadata["grounding_attempted"] = True
             
-            # Add SchemaFunction for structured output
-            if is_json_mode:
-                schema_function = _create_output_schema(req)
-                tools.append(Tool(function_declarations=[schema_function]))
+            # Runtime assert: exactly 2 messages
+            message_count = sum([
+                1 if system_content else 0,
+                1 if user_content else 0
+            ])
+            assert message_count == 2, f"Expected exactly 2 messages, got {message_count}"
             
-            # Map Contestra mode to genai mode
-            # AUTO → "AUTO", REQUIRED → "ANY" (Gemini doesn't accept "REQUIRED")
-            tool_config = {
-                "function_calling_config": {
-                    "mode": "ANY" if grounding_mode == "REQUIRED" else "AUTO"
+            # Check if grounding is requested
+            is_grounded = getattr(req, "grounded", False)
+            is_json_mode = getattr(req, "json_mode", False)
+        
+            # Extract grounding mode (AUTO or REQUIRED)
+            grounding_mode = getattr(req, "grounding_mode", "AUTO")
+            if hasattr(req, "meta") and isinstance(req.meta, dict):
+                grounding_mode = req.meta.get("grounding_mode", grounding_mode)
+            metadata["grounding_mode_requested"] = grounding_mode
+        
+            # Prepare model name for google-genai client
+            model_name = req.model
+            if not model_name.startswith("publishers/google/models/"):
+                model_name = f"publishers/google/models/{model_name}"
+        
+            # Prepare tools for FFC
+            tools = []
+            schema_function = None
+            tool_config = None
+        
+            if is_grounded or is_json_mode:
+                # Add GoogleSearch for grounding
+                if is_grounded:
+                    tools.append(Tool(google_search=GoogleSearch()))
+                    metadata["grounding_attempted"] = True
+            
+                # Add SchemaFunction for structured output
+                if is_json_mode:
+                    schema_function = _create_output_schema(req)
+                    tools.append(Tool(function_declarations=[schema_function]))
+            
+                # Map Contestra mode to genai mode
+                # AUTO → "AUTO", REQUIRED → "ANY" (Gemini doesn't accept "REQUIRED")
+                tool_config = {
+                    "function_calling_config": {
+                        "mode": "ANY" if grounding_mode == "REQUIRED" else "AUTO"
+                    }
                 }
+            
+                # If we have a schema function, restrict final output to it
+                if schema_function:
+                    tool_config["function_calling_config"]["allowed_function_names"] = [
+                        schema_function.name
+                    ]
+        
+            # Configure safety settings
+            safety_settings = {
+                HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+                HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
             }
+        
+            # Configure generation with tools embedded
+            generation_config = self._create_generation_config(
+                req,
+                system_content=system_content,
+                tools=tools if tools else None,
+                tool_config=tool_config,
+                safety_settings=safety_settings
+            )
+        
+            # Single call with FFC (tools embedded in config) with retry logic
+            max_attempts = 4  # 1 initial + 3 retries
+            base_delay = 0.5
+            request_id = metadata.get("request_id") or f"req_{int(time.time()*1000)}_{random.randint(1000,9999)}"
+            metadata["request_id"] = request_id
+        
+            # Check circuit breaker
+            breaker_key = f"vertex:{model_name}"
+            breaker = _vertex_circuit_breakers.get(breaker_key)
+            if not breaker:
+                breaker = VertexCircuitBreakerState()
+                _vertex_circuit_breakers[breaker_key] = breaker
             
-            # If we have a schema function, restrict final output to it
-            if schema_function:
-                tool_config["function_calling_config"]["allowed_function_names"] = [
-                    schema_function.name
-                ]
-        
-        # Configure safety settings
-        safety_settings = {
-            HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
-            HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
-        }
-        
-        # Configure generation with tools embedded
-        generation_config = self._create_generation_config(
-            req,
-            system_content=system_content,
-            tools=tools if tools else None,
-            tool_config=tool_config,
-            safety_settings=safety_settings
-        )
-        
-        # Single call with FFC (tools embedded in config) with retry logic
-        max_attempts = 4  # 1 initial + 3 retries
-        base_delay = 0.5
-        request_id = metadata.get("request_id") or f"req_{int(time.time()*1000)}_{random.randint(1000,9999)}"
-        metadata["request_id"] = request_id
-        
-        # Check circuit breaker
-        breaker_key = f"vertex:{model_name}"
-        breaker = _vertex_circuit_breakers.get(breaker_key)
-        if not breaker:
-            breaker = VertexCircuitBreakerState()
-            _vertex_circuit_breakers[breaker_key] = breaker
-            
-        # Check if circuit is open
-        if breaker.state == "open":
-            if breaker.open_until and datetime.now() > breaker.open_until:
-                # Try half-open
-                breaker.state = "half-open"
-                logger.info(f"[vertex] Circuit breaker half-open for {breaker_key}")
-            else:
-                # Fail fast
-                metadata["circuit_state"] = "open"
-                metadata["breaker_open_reason"] = "consecutive_503s"
-                metadata["error_type"] = "service_unavailable_upstream"
-                raise Exception(f"Circuit breaker open for {breaker_key} until {breaker.open_until}")
-        
-        metadata["circuit_state"] = breaker.state
-        
-        response = None
-        last_error = None
-        
-        for attempt in range(max_attempts):
-            try:
-                if attempt > 0:
-                    # Exponential backoff with jitter
-                    delay = base_delay * (2 ** (attempt - 1))  # 0.5s, 1s, 2s, 4s
-                    jitter = random.uniform(0, delay * 0.5)  # Up to 50% jitter
-                    total_delay = delay + jitter
-                    metadata["backoff_ms_last"] = int(total_delay * 1000)
-                    logger.info(f"[vertex] Retry {attempt}/{max_attempts-1} after {total_delay:.2f}s for {request_id}")
-                    await asyncio.sleep(total_delay)
-                
-                # Build contents for google-genai (just user message since system is in config)
-                contents = user_content  # google-genai accepts string directly
-                
-                response = await asyncio.wait_for(
-                    run_in_threadpool(
-                        self.genai_client.models.generate_content,
-                        model=model_name,
-                        contents=contents,
-                        config=generation_config  # Contains system instruction, tools, tool_config, safety settings
-                    ),
-                    timeout=timeout
-                )
-                
-                # Success - reset circuit breaker
-                if breaker.state == "half-open" or breaker.consecutive_failures > 0:
-                    logger.info(f"[vertex] Circuit breaker reset for {breaker_key}")
-                breaker.consecutive_failures = 0
-                breaker.state = "closed"
-                metadata["retry_count"] = attempt
-                break
-                    
-            except asyncio.TimeoutError:
-                logger.error(f"Vertex FFC call timed out after {timeout}s")
-                raise
-            except Exception as e:
-                error_str = str(e)
-                last_error = e
-                
-                # Check if it's a 503 error
-                if "503" in error_str or "UNAVAILABLE" in error_str:
-                    breaker.consecutive_failures += 1
-                    breaker.total_503_count += 1
-                    breaker.last_failure_time = datetime.now()
-                    
-                    metadata["upstream_status"] = 503
-                    metadata["upstream_error"] = "UNAVAILABLE"
-                    
-                    # Check if we should open the circuit
-                    if breaker.consecutive_failures >= 5:
-                        # Open circuit for 60-120 seconds
-                        hold_time = random.randint(60, 120)
-                        breaker.state = "open"
-                        breaker.open_until = datetime.now() + timedelta(seconds=hold_time)
-                        metadata["circuit_state"] = "open"
-                        metadata["breaker_open_reason"] = f"{breaker.consecutive_failures}_consecutive_503s"
-                        logger.error(f"[vertex] Circuit breaker opened for {breaker_key} after {breaker.consecutive_failures} consecutive 503s")
-                    
-                    if attempt < max_attempts - 1:
-                        logger.warning(f"[vertex] 503 error on attempt {attempt+1}/{max_attempts}: {error_str}")
-                        continue
+            # Check if circuit is open
+            if breaker.state == "open":
+                if breaker.open_until and datetime.now() > breaker.open_until:
+                    # Try half-open
+                    breaker.state = "half-open"
+                    logger.info(f"[vertex] Circuit breaker half-open for {breaker_key}")
                 else:
-                    # Non-503 error, don't retry
-                    logger.error(f"[vertex] Non-503 error: {error_str}")
+                    # Fail fast
+                    metadata["circuit_state"] = "open"
+                    metadata["breaker_open_reason"] = "consecutive_503s"
+                    metadata["error_type"] = "service_unavailable_upstream"
+                    raise Exception(f"Circuit breaker open for {breaker_key} until {breaker.open_until}")
+        
+            metadata["circuit_state"] = breaker.state
+        
+            response = None
+            last_error = None
+        
+            for attempt in range(max_attempts):
+                try:
+                    if attempt > 0:
+                        # Exponential backoff with jitter
+                        delay = base_delay * (2 ** (attempt - 1))  # 0.5s, 1s, 2s, 4s
+                        jitter = random.uniform(0, delay * 0.5)  # Up to 50% jitter
+                        total_delay = delay + jitter
+                        metadata["backoff_ms_last"] = int(total_delay * 1000)
+                        logger.info(f"[vertex] Retry {attempt}/{max_attempts-1} after {total_delay:.2f}s for {request_id}")
+                        await asyncio.sleep(total_delay)
+                
+                    # Build contents for google-genai (just user message since system is in config)
+                    contents = user_content  # google-genai accepts string directly
+                
+                    response = await asyncio.wait_for(
+                        run_in_threadpool(
+                            self.genai_client.models.generate_content,
+                            model=model_name,
+                            contents=contents,
+                            config=generation_config  # Contains system instruction, tools, tool_config, safety settings
+                        ),
+                        timeout=timeout
+                    )
+                
+                    # Success - reset circuit breaker
+                    if breaker.state == "half-open" or breaker.consecutive_failures > 0:
+                        logger.info(f"[vertex] Circuit breaker reset for {breaker_key}")
+                    breaker.consecutive_failures = 0
+                    breaker.state = "closed"
+                    metadata["retry_count"] = attempt
+                    break
+                    
+                except asyncio.TimeoutError:
+                    logger.error(f"Vertex FFC call timed out after {timeout}s")
                     raise
+                except Exception as e:
+                    error_str = str(e)
+                    last_error = e
+                
+                    # Check if it's a 503 error
+                    if "503" in error_str or "UNAVAILABLE" in error_str:
+                        breaker.consecutive_failures += 1
+                        breaker.total_503_count += 1
+                        breaker.last_failure_time = datetime.now()
+                    
+                        metadata["upstream_status"] = 503
+                        metadata["upstream_error"] = "UNAVAILABLE"
+                    
+                        # Check if we should open the circuit
+                        if breaker.consecutive_failures >= 5:
+                            # Open circuit for 60-120 seconds
+                            hold_time = random.randint(60, 120)
+                            breaker.state = "open"
+                            breaker.open_until = datetime.now() + timedelta(seconds=hold_time)
+                            metadata["circuit_state"] = "open"
+                            metadata["breaker_open_reason"] = f"{breaker.consecutive_failures}_consecutive_503s"
+                            logger.error(f"[vertex] Circuit breaker opened for {breaker_key} after {breaker.consecutive_failures} consecutive 503s")
+                    
+                        if attempt < max_attempts - 1:
+                            logger.warning(f"[vertex] 503 error on attempt {attempt+1}/{max_attempts}: {error_str}")
+                            continue
+                    else:
+                        # Non-503 error, don't retry
+                        logger.error(f"[vertex] Non-503 error: {error_str}")
+                        raise
         
-        if response is None:
-            metadata["retry_count"] = max_attempts - 1
-            metadata["error_type"] = "service_unavailable_upstream"
-            raise last_error or Exception("All retry attempts failed")
+            if response is None:
+                metadata["retry_count"] = max_attempts - 1
+                metadata["error_type"] = "service_unavailable_upstream"
+                raise last_error or Exception("All retry attempts failed")
         
-        # Extract response text first
-        response_text = _extract_text_from_response(response)
+            # Extract response text first
+            response_text = _extract_text_from_response(response)
         
-        # Post-call verification
-        grounded_effective = False
-        schema_valid = False
-        citations = []
-        annotations = []
+            # Post-call verification
+            grounded_effective = False
+            schema_valid = False
+            citations = []
+            annotations = []
         
-        if is_grounded:
-            # Check for grounding evidence
-            grounded_effective, grounding_count = detect_vertex_grounding(response)
-            metadata["grounded_effective"] = grounded_effective
-            metadata["tool_call_count"] = grounding_count
-            
-            if not grounded_effective:
-                metadata["why_not_grounded"] = "No GoogleSearch usage detected"
-            
-            # Extract anchored citations
-            annotations, citations, citation_telemetry = _extract_anchored_citations(response, response_text)
-            metadata.update(citation_telemetry)
-        
-        if is_json_mode and schema_function:
-            # Check for valid schema function call
-            func_name, func_args = _extract_function_call(response)
-            metadata["final_function_called"] = func_name
-            
-            if func_name == schema_function.name and func_args is not None:
-                schema_valid = True
-                metadata["schema_args_valid"] = True
-                # Use function arguments as the response
-                response_text = json.dumps(func_args)
-            else:
-                metadata["schema_args_valid"] = False
-                # response_text already extracted above
-        
-        # Enforce REQUIRED mode post-hoc (with relaxation for Google vendors)
-        if grounding_mode == "REQUIRED":
             if is_grounded:
-                if metadata.get("anchored_citations_count", 0) > 0:
-                    # Prefer anchored citations
-                    metadata["required_pass_reason"] = "anchored_google"
-                elif grounded_effective:
-                    # Fall back to unlinked if tools ran
-                    tc = int(metadata.get("tool_call_count", 0) or 0)
-                    unlinked = int(metadata.get("unlinked_sources_count", 0) or 0)
-                    if tc > 0 and unlinked > 0:
-                        metadata["required_pass_reason"] = "unlinked_google"
+                # Check for grounding evidence
+                grounded_effective, grounding_count = detect_vertex_grounding(response)
+                metadata["grounded_effective"] = grounded_effective
+                metadata["tool_call_count"] = grounding_count
+            
+                if not grounded_effective:
+                    metadata["why_not_grounded"] = "No GoogleSearch usage detected"
+            
+                # Extract anchored citations
+                annotations, citations, citation_telemetry = _extract_anchored_citations(response, response_text)
+                metadata.update(citation_telemetry)
+        
+            if is_json_mode and schema_function:
+                # Check for valid schema function call
+                func_name, func_args = _extract_function_call(response)
+                metadata["final_function_called"] = func_name
+            
+                if func_name == schema_function.name and func_args is not None:
+                    schema_valid = True
+                    metadata["schema_args_valid"] = True
+                    # Use function arguments as the response
+                    response_text = json.dumps(func_args)
+                else:
+                    metadata["schema_args_valid"] = False
+                    # response_text already extracted above
+        
+            # Enforce REQUIRED mode post-hoc (with relaxation for Google vendors)
+            if grounding_mode == "REQUIRED":
+                if is_grounded:
+                    if metadata.get("anchored_citations_count", 0) > 0:
+                        # Prefer anchored citations
+                        metadata["required_pass_reason"] = "anchored_google"
+                    elif grounded_effective:
+                        # Fall back to unlinked if tools ran
+                        tc = int(metadata.get("tool_call_count", 0) or 0)
+                        unlinked = int(metadata.get("unlinked_sources_count", 0) or 0)
+                        if tc > 0 and unlinked > 0:
+                            metadata["required_pass_reason"] = "unlinked_google"
+                        else:
+                            raise GroundingRequiredFailedError(
+                                f"REQUIRED grounding mode specified but no grounding evidence found. "
+                                f"Tool calls: {metadata.get('tool_call_count', 0)}"
+                            )
                     else:
                         raise GroundingRequiredFailedError(
-                            f"REQUIRED grounding mode specified but no grounding evidence found. "
-                            f"Tool calls: {metadata.get('tool_call_count', 0)}"
+                            f"REQUIRED grounding mode specified but no grounding detected."
                         )
-                else:
-                    raise GroundingRequiredFailedError(
-                        f"REQUIRED grounding mode specified but no grounding detected."
+                if is_json_mode and not schema_valid:
+                    raise ValueError(
+                        f"REQUIRED mode specified but no valid schema function call found. "
+                        f"Final function: {metadata.get('final_function_called', 'None')}"
                     )
-            if is_json_mode and not schema_valid:
-                raise ValueError(
-                    f"REQUIRED mode specified but no valid schema function call found. "
-                    f"Final function: {metadata.get('final_function_called', 'None')}"
+        
+            # Calculate timing using monotonic clock
+            # This is done here but should be in finally block - moving below
+        
+            # Add model version if available
+            if hasattr(response, 'model_version'):
+                metadata["modelVersion"] = response.model_version
+        
+            # Add citations and annotations to metadata for telemetry compatibility
+            if citations:
+                metadata["citations"] = citations
+                metadata["citation_count"] = len(citations)
+            if annotations:
+                metadata["annotations"] = annotations
+        
+            # Add anchor extraction status
+            metadata["anchor_extraction_status"] = (
+                "available" if metadata.get('anchored_citations_count', 0) > 0 else "not_available"
+            )
+        
+            # Store annotations in metadata if present
+            if annotations:
+                metadata["annotations"] = annotations
+        
+            # Build usage dict (Vertex doesn't provide detailed token counts)
+            usage = {
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0
+            }
+        
+            # Try to get usage from response if available
+            if hasattr(response, 'usage_metadata'):
+                usage_meta = response.usage_metadata
+                if usage_meta:
+                    usage["prompt_tokens"] = getattr(usage_meta, 'prompt_token_count', 0)
+                    usage["completion_tokens"] = getattr(usage_meta, 'candidates_token_count', 0)
+                    usage["total_tokens"] = getattr(usage_meta, 'total_token_count', 0)
+            
+                # Return the response
+                return LLMResponse(
+                    content=response_text,
+                    model_version=getattr(response, '_model_id', req.model),
+                    model_fingerprint=None,
+                    grounded_effective=grounded_effective,
+                    usage=usage,
+                    latency_ms=metadata.get("response_time_ms", 0),
+                    raw_response=None,
+                    success=bool(response_text),
+                    vendor='vertex',
+                    model=req.model,
+                    metadata=metadata,
+                    citations=citations if citations else None,
+                    error_type=None if response_text else "EMPTY_COMPLETION",
+                    error_message=None if response_text else "No completion generated"
                 )
         
-        # Add timing
-        metadata["response_time_ms"] = int((time.time() - start_time) * 1000)
-        
-        # Add model version if available
-        if hasattr(response, 'model_version'):
-            metadata["modelVersion"] = response.model_version
-        
-        # Add citations and annotations to metadata for telemetry compatibility
-        if citations:
-            metadata["citations"] = citations
-            metadata["citation_count"] = len(citations)
-        if annotations:
-            metadata["annotations"] = annotations
-        
-        # Add anchor extraction status
-        metadata["anchor_extraction_status"] = (
-            "available" if metadata.get('anchored_citations_count', 0) > 0 else "not_available"
-        )
-        
-        # Store annotations in metadata if present
-        if annotations:
-            metadata["annotations"] = annotations
-            
-        return LLMResponse(
-            content=response_text,
-            model_version=getattr(response, '_model_id', req.model),
-            model_fingerprint=None,
-            grounded_effective=grounded_effective,
-            usage=usage,
-            latency_ms=elapsed_ms,
-            raw_response=None,
-            success=bool(response_text),
-            vendor='vertex',
-            model=req.model,
-            metadata=metadata,
-            citations=citations if citations else None,
-            error_type=None if response_text else "EMPTY_COMPLETION",
-            error_message=None if response_text else "No completion generated"
-        )
+        finally:
+            # Always record timing, even on errors
+            metadata["response_time_ms"] = int((time.perf_counter() - start_time) * 1000)

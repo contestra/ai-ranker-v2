@@ -1,0 +1,27 @@
+[
+  {
+    "vendor": "openai",
+    "status": "\u2705 PASSED",
+    "response_length": 0,
+    "tool_calls": 0,
+    "citations": 0,
+    "anchored_citations": 0,
+    "coverage_pct": 0,
+    "retry_count": 0
+  },
+  {
+    "vendor": "gemini_direct",
+    "status": "\u2705 PASSED",
+    "response_length": 4521,
+    "chunks": 0,
+    "supports": 0,
+    "anchored_citations": 15,
+    "coverage_pct": 68.06016368060163,
+    "retry_count": 0
+  },
+  {
+    "vendor": "vertex",
+    "status": "\u274c FAILED",
+    "error": "name 'usage' is not defined"
+  }
+]

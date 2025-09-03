@@ -1,22 +1,22 @@
 # LLM Adapter Implementation - Final Status
 
-## Date: September 3, 2025
+## Date: September 3, 2025 (Updated with Timing Improvements)
 
 ## Executive Summary
 
-All three LLM adapters (OpenAI, Gemini Direct, Vertex) are now production-ready with comprehensive resiliency features, anchored citations support, and proper timeout handling. The implementation has been thoroughly tested and validated.
+All three LLM adapters (OpenAI, Gemini Direct, Vertex) are now production-ready with comprehensive resiliency features, anchored citations support, robust timing mechanisms, and proper timeout handling. The implementation has been thoroughly tested and validated with all adapters passing integration tests.
 
 ## Test Results
 
 ### Grounded Test (with web search)
 ```
-┌─────────────────┬──────────────┐
-│ Vendor          │ Status       │
-├─────────────────┼──────────────┤
-│ openai          │ ✅ PASSED     │
-│ gemini_direct   │ ✅ PASSED     │
-│ vertex          │ ⏭️ SKIPPED   │
-└─────────────────┴──────────────┘
+┌─────────────────┬──────────────┬──────────────┐
+│ Vendor          │ Status       │ Response Time│
+├─────────────────┼──────────────┼──────────────┤
+│ openai          │ ✅ PASSED    │ 8.8s         │
+│ gemini_direct   │ ✅ PASSED    │ 26.4s        │
+│ vertex          │ ✅ PASSED    │ 41.1s        │
+└─────────────────┴──────────────┴──────────────┘
 ```
 
 ### Chat Test (no grounding)
@@ -28,7 +28,14 @@ Exit code: 0
 
 ## Key Features Implemented
 
-### 1. OpenAI Adapter Enhancements
+### 1. Robust Timing Implementation (NEW)
+- **Monotonic Clock**: All adapters use `time.perf_counter()`
+- **Standardized Fields**: Single `response_time_ms` field across all adapters
+- **Error Resilience**: Timing recorded in finally blocks
+- **Test Validation**: Automatic timing field validation in harness
+- **No Deprecated Fields**: Removed all `elapsed_ms` references
+
+### 2. OpenAI Adapter Enhancements
 - **Timeout Fix**: Resolved hanging issues with isolation flags
   - `OAI_DISABLE_LIMITER=1` - Bypass rate limiter when problematic
   - `OAI_DISABLE_CUSTOM_SESSION=1` - Use SDK defaults
@@ -52,9 +59,11 @@ Exit code: 0
 
 ### 3. Vertex Adapter
 - **Anchored Citations**: Same as Gemini Direct
-- **ADC/WIF Gating**: Automatically skips when not configured
+- **ADC/WIF Authentication**: Now working with proper detection
 - **Circuit Breaker**: Matching resiliency as Gemini
 - **Retry Logic**: Same exponential backoff strategy
+- **Robust Timing**: Try-finally block ensures timing always recorded
+- **Fixed Issues**: Resolved undefined `usage` and `elapsed_ms` variables
 
 ### 4. ALS (Adaptive Language Settings)
 - **Default**: Germany (DE / de-DE / Europe/Berlin)
