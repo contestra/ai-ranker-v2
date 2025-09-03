@@ -210,13 +210,14 @@ class OpenAIAdapter:
     def _build_responses_payload(self, request: LLMRequest, system_content: str, user_content: str, 
                                   grounding_mode: str, json_schema: Optional[Dict] = None) -> Dict:
         """Build proper Responses API payload with tools."""
-        # Base payload - NO temperature for Responses API
+        # Base payload
         payload = {
             "model": request.model,
             "input": [
                 {"role": "system", "content": [{"type": "input_text", "text": system_content}]},
                 {"role": "user", "content": [{"type": "input_text", "text": user_content}]}
             ],
+            "temperature": request.temperature or 0.7,
             "max_output_tokens": GROUNDED_MAX_TOKENS  # Always 6000 for grounded runs
         }
         
@@ -231,15 +232,11 @@ class OpenAIAdapter:
         
         # Add strict JSON schema if provided
         if json_schema:
-            schema = json_schema.get("schema", {})
-            # Ensure additionalProperties is false for strict mode
-            if "additionalProperties" not in schema:
-                schema["additionalProperties"] = False
             payload["text"] = {
                 "format": {
                     "type": "json_schema",
                     "name": json_schema.get("name", "Output"),
-                    "schema": schema,
+                    "schema": json_schema.get("schema", {}),
                     "strict": True
                 }
             }
@@ -250,7 +247,7 @@ class OpenAIAdapter:
         """Call the actual Responses API endpoint."""
         # First try with web_search tool
         try:
-            response = await self.client.responses.create(**payload, timeout=timeout)
+            response = await self.client.beta.responses.create(**payload, timeout=timeout)
             return response, "web_search"
         except Exception as e:
             error_str = str(e)
@@ -258,7 +255,7 @@ class OpenAIAdapter:
             if "unsupported" in error_str.lower() or "400" in error_str:
                 logger.info("[OAI_RESPONSES] web_search unsupported, falling back to web_search_preview")
                 payload["tools"] = [{"type": "web_search_preview"}]
-                response = await self.client.responses.create(**payload, timeout=timeout)
+                response = await self.client.beta.responses.create(**payload, timeout=timeout)
                 return response, "web_search_preview"
             raise
     

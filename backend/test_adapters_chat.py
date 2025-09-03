@@ -32,11 +32,7 @@ async def test_openai_chat():
     print("TESTING OPENAI ADAPTER - CHAT MODE")
     print("="*80)
     
-    # Try to use fixed adapter
-    try:
-        from app.llm.adapters.openai_adapter_fixed import OpenAIAdapter
-    except ImportError:
-        from app.llm.adapters.openai_adapter import OpenAIAdapter
+    from app.llm.adapters.openai_adapter import OpenAIAdapter
     
     from app.llm.types import LLMRequest
     

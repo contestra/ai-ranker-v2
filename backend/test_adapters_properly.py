@@ -129,7 +129,7 @@ async def test_openai_adapter():
     
     # Import the fixed adapter
     try:
-        from app.llm.adapters.openai_adapter_fixed import OpenAIAdapter
+        from app.llm.adapters.openai_adapter import OpenAIAdapter
     except ImportError:
         # Fallback to original if fixed doesn't exist
         from app.llm.adapters.openai_adapter import OpenAIAdapter
