@@ -8,11 +8,14 @@ per PRD-Adapter-Layer-V1 (Phase-0).
 """
 import json
 import os
+import random
 import re
 import time
 import logging
 import asyncio
 import hashlib
+from dataclasses import dataclass
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
 # REQUIRED: google-genai is the only client for Vertex/Gemini calls
@@ -44,6 +47,19 @@ from urllib.parse import urlparse, urlunparse, parse_qs
 from app.llm.errors import GroundingRequiredFailedError
 
 logger = logging.getLogger(__name__)
+
+# Circuit breaker state management (shared with gemini_adapter for consistency)
+@dataclass
+class VertexCircuitBreakerState:
+    """Circuit breaker state for a specific vendor+model combination."""
+    consecutive_failures: int = 0
+    last_failure_time: Optional[datetime] = None
+    state: str = "closed"  # closed, open, half-open
+    open_until: Optional[datetime] = None
+    total_503_count: int = 0
+    
+# Global circuit breaker states per model
+_vertex_circuit_breakers: Dict[str, VertexCircuitBreakerState] = {}
 
 # Debug flag for citation extraction
 DEBUG_GROUNDING = os.getenv("DEBUG_GROUNDING", "false").lower() == "true"
@@ -148,65 +164,189 @@ def _extract_function_call(response) -> tuple[Optional[str], Optional[Dict]]:
     return None, None
 
 
-def _extract_citations(response) -> tuple[List[Dict], Dict]:
+def _extract_redirect_url(google_url: str) -> str:
+    """Extract real URL from Google grounding redirect."""
+    if "vertexaisearch.cloud.google.com/grounding-api-redirect/" in google_url:
+        # This is a redirect URL, extract if possible
+        # For now, return as-is; in production, decode the redirect
+        return google_url
+    return google_url
+
+
+def _extract_anchored_citations(response, response_text: str) -> tuple[List[Dict], List[Dict], Dict]:
     """
-    Extract citations from Vertex response.
-    Returns (citations_list, telemetry_dict).
+    Extract both anchored and unlinked citations from Vertex response.
+    
+    Returns:
+        annotations: List of anchored text spans with sources
+        citations: Deduplicated list of all sources
+        telemetry: Metrics about citation extraction
     """
-    citations = []
+    annotations = []
+    citations_map = {}  # key: resolved_url, value: citation dict
     telemetry = {
-        "citation_extractor_version": "ffc",
-        "anchored_count": 0,
-        "unlinked_count": 0,
+        "citation_extractor_version": "anchored_ffc",
+        "anchored_citations_count": 0,
+        "unlinked_sources_count": 0,
         "total_raw_count": 0,
-        "vertex_tool_calls": 0
+        "vertex_tool_calls": 0,
+        "anchored_coverage_pct": 0.0,
+        "why_not_anchored": None,
+        "grounding_evidence_missing": False
     }
     
-    # Track unique URLs for deduplication
-    seen_urls = set()
+    anchored_sources = set()
+    all_chunks = {}  # chunk_index -> chunk_data
     
     if not response:
-        return citations, telemetry
+        return annotations, list(citations_map.values()), telemetry
     
-    # Extract from grounding metadata if available
-    if hasattr(response, 'candidates'):
-        for candidate in response.candidates:
-            # Check for grounding metadata
-            if hasattr(candidate, 'grounding_metadata'):
-                gm = candidate.grounding_metadata
-                
-                # Extract web_search_queries
-                if hasattr(gm, 'web_search_queries'):
-                    for query in gm.web_search_queries:
-                        telemetry["vertex_tool_calls"] += 1
-                
-                # Extract grounding_chunks (evidence snippets)
-                if hasattr(gm, 'grounding_chunks'):
-                    for chunk in gm.grounding_chunks:
-                        if hasattr(chunk, 'web'):
-                            web = chunk.web
-                            if hasattr(web, 'uri') and web.uri:
-                                normalized = _normalize_url(web.uri)
-                                if normalized not in seen_urls:
-                                    seen_urls.add(normalized)
-                                    citations.append({
-                                        "url": web.uri,
-                                        "title": getattr(web, 'title', ''),
-                                        "snippet": '',
-                                        "type": "groundingChunks",
-                                        "domain": _get_registrable_domain(web.uri)
+    try:
+        # Extract from grounding metadata if available
+        if hasattr(response, 'candidates'):
+            for candidate in response.candidates:
+                # Check for grounding metadata
+                if hasattr(candidate, 'grounding_metadata'):
+                    gm = candidate.grounding_metadata
+                    
+                    # Count tool calls (web searches)
+                    web_searches = getattr(gm, 'web_search_queries', []) or []
+                    telemetry["vertex_tool_calls"] = len(web_searches)
+                    
+                    # First, collect all chunks
+                    chunks = getattr(gm, 'grounding_chunks', []) or []
+                    
+                    # Defensive: Check if search ran but chunks are empty
+                    if len(web_searches) > 0 and len(chunks) == 0:
+                        logger.warning(f"[vertex] Search executed ({len(web_searches)} queries), "
+                                     "but grounding_chunks are empty. Anchored citations unavailable.")
+                        telemetry["why_not_anchored"] = "API_RESPONSE_MISSING_GROUNDING_CHUNKS"
+                        telemetry["grounding_evidence_missing"] = True
+                    
+                    if hasattr(gm, 'grounding_chunks'):
+                        for idx, chunk in enumerate(gm.grounding_chunks):
+                            if hasattr(chunk, 'web'):
+                                web = chunk.web
+                                if hasattr(web, 'uri') and web.uri:
+                                    raw_uri = web.uri
+                                    resolved_url = _extract_redirect_url(web.uri)
+                                    title = getattr(web, 'title', '') or ''
+                                    
+                                    all_chunks[idx] = {
+                                        "raw_uri": raw_uri,
+                                        "resolved_url": resolved_url,
+                                        "title": title,
+                                        "domain": _get_registrable_domain(resolved_url),
+                                        "chunk_index": idx
+                                    }
+                    
+                    # Now process grounding supports for anchored citations
+                    covered_chars = 0
+                    supports = getattr(gm, 'grounding_supports', []) or []
+                    
+                    # Defensive: Check if search ran but supports are empty
+                    if len(web_searches) > 0 and len(supports) == 0:
+                        logger.warning(f"[vertex] Search executed ({len(web_searches)} queries), "
+                                     "but grounding_supports are empty. Anchored citations unavailable.")
+                        if not telemetry.get("why_not_anchored"):
+                            telemetry["why_not_anchored"] = "API_RESPONSE_MISSING_GROUNDING_SUPPORTS"
+                        telemetry["grounding_evidence_missing"] = True
+                    
+                    if hasattr(gm, 'grounding_supports'):
+                        for support in gm.grounding_supports:
+                            segment = getattr(support, 'segment', None)
+                            if not segment:
+                                continue
+                                
+                            # Extract text position
+                            start_idx = getattr(segment, 'start_index', None)
+                            end_idx = getattr(segment, 'end_index', None)
+                            text = getattr(segment, 'text', None)
+                            
+                            if start_idx is None or end_idx is None:
+                                continue
+                                
+                            # Get referenced chunks
+                            chunk_indices = getattr(support, 'grounding_chunk_indices', []) or []
+                            sources = []
+                            
+                            for chunk_idx in chunk_indices:
+                                if chunk_idx in all_chunks:
+                                    chunk_data = all_chunks[chunk_idx]
+                                    sources.append({
+                                        "resolved_url": chunk_data["resolved_url"],
+                                        "raw_uri": chunk_data["raw_uri"],
+                                        "title": chunk_data["title"],
+                                        "domain": chunk_data["domain"],
+                                        "source_id": f"chunk_{chunk_idx}",
+                                        "chunk_index": chunk_idx
                                     })
-                                    telemetry["unlinked_count"] += 1
+                                    anchored_sources.add(chunk_data["resolved_url"])
+                                    
+                                    # Add to citations map
+                                    url_key = chunk_data["resolved_url"]
+                                    if url_key not in citations_map:
+                                        citations_map[url_key] = {
+                                            "resolved_url": chunk_data["resolved_url"],
+                                            "raw_uri": chunk_data["raw_uri"],
+                                            "title": chunk_data["title"],
+                                            "domain": chunk_data["domain"],
+                                            "source_id": f"chunk_{chunk_idx}",
+                                            "count": 0
+                                        }
+                                    citations_map[url_key]["count"] += 1
+                            
+                            if sources:
+                                # Verify text matches if possible
+                                if text and response_text and start_idx < len(response_text):
+                                    actual_text = response_text[start_idx:end_idx]
+                                    if text != actual_text:
+                                        logger.debug(f"Text mismatch: expected '{text}', got '{actual_text}'")
+                                
+                                annotations.append({
+                                    "start": start_idx,
+                                    "end": end_idx,
+                                    "text": text or (response_text[start_idx:end_idx] if response_text else ""),
+                                    "sources": sources
+                                })
+                                covered_chars += (end_idx - start_idx)
+                    
+                    # Add unlinked sources (chunks not referenced by any support)
+                    for idx, chunk_data in all_chunks.items():
+                        if chunk_data["resolved_url"] not in anchored_sources:
+                            url_key = chunk_data["resolved_url"]
+                            if url_key not in citations_map:
+                                citations_map[url_key] = {
+                                    "resolved_url": chunk_data["resolved_url"],
+                                    "raw_uri": chunk_data["raw_uri"],
+                                    "title": chunk_data["title"],
+                                    "domain": chunk_data["domain"],
+                                    "source_id": f"chunk_{idx}",
+                                    "count": 0
+                                }
+                            telemetry["unlinked_sources_count"] += 1
+                    
+                    # Calculate coverage
+                    if response_text and len(response_text) > 0:
+                        telemetry["anchored_coverage_pct"] = min(100.0, (covered_chars / len(response_text)) * 100)
+                    
+                    telemetry["anchored_citations_count"] = len(anchored_sources)
+                    telemetry["total_raw_count"] = len(all_chunks)
     
-    telemetry["total_raw_count"] = len(citations)
+    except Exception as e:
+        logger.warning(f"[Vertex anchored citations] extraction failed: {e}")
     
-    # Filter based on settings
-    if not EMIT_UNLINKED_SOURCES and telemetry["anchored_count"] > 0:
-        citations = [c for c in citations if c["type"] in ANCHORED_CITATION_TYPES]
-        telemetry["filtered_unlinked"] = telemetry["unlinked_count"]
-        telemetry["unlinked_count"] = 0
+    # Convert citations map to list
+    citations = list(citations_map.values())
     
-    return citations, telemetry
+    # Filter based on settings if needed
+    if not EMIT_UNLINKED_SOURCES and telemetry['anchored_citations_count'] > 0:
+        # Keep only anchored citations
+        citations = [c for c in citations if c.get("count", 0) > 0]
+        telemetry["filtered_unlinked"] = telemetry['unlinked_sources_count']
+        telemetry['unlinked_sources_count'] = 0
+    
+    return annotations, citations, telemetry
 
 
 def _create_output_schema(req: LLMRequest) -> FunctionDeclaration:
@@ -489,32 +629,116 @@ class VertexAdapter:
             safety_settings=safety_settings
         )
         
-        # Single call with FFC (tools embedded in config)
-        try:
-            # Build contents for google-genai (just user message since system is in config)
-            contents = user_content  # google-genai accepts string directly
+        # Single call with FFC (tools embedded in config) with retry logic
+        max_attempts = 4  # 1 initial + 3 retries
+        base_delay = 0.5
+        request_id = metadata.get("request_id") or f"req_{int(time.time()*1000)}_{random.randint(1000,9999)}"
+        metadata["request_id"] = request_id
+        
+        # Check circuit breaker
+        breaker_key = f"vertex:{model_name}"
+        breaker = _vertex_circuit_breakers.get(breaker_key)
+        if not breaker:
+            breaker = VertexCircuitBreakerState()
+            _vertex_circuit_breakers[breaker_key] = breaker
             
-            response = await asyncio.wait_for(
-                run_in_threadpool(
-                    self.genai_client.models.generate_content,
-                    model=model_name,
-                    contents=contents,
-                    config=generation_config  # Contains system instruction, tools, tool_config, safety settings
-                ),
-                timeout=timeout
-            )
+        # Check if circuit is open
+        if breaker.state == "open":
+            if breaker.open_until and datetime.now() > breaker.open_until:
+                # Try half-open
+                breaker.state = "half-open"
+                logger.info(f"[vertex] Circuit breaker half-open for {breaker_key}")
+            else:
+                # Fail fast
+                metadata["circuit_state"] = "open"
+                metadata["breaker_open_reason"] = "consecutive_503s"
+                metadata["error_type"] = "service_unavailable_upstream"
+                raise Exception(f"Circuit breaker open for {breaker_key} until {breaker.open_until}")
+        
+        metadata["circuit_state"] = breaker.state
+        
+        response = None
+        last_error = None
+        
+        for attempt in range(max_attempts):
+            try:
+                if attempt > 0:
+                    # Exponential backoff with jitter
+                    delay = base_delay * (2 ** (attempt - 1))  # 0.5s, 1s, 2s, 4s
+                    jitter = random.uniform(0, delay * 0.5)  # Up to 50% jitter
+                    total_delay = delay + jitter
+                    metadata["backoff_ms_last"] = int(total_delay * 1000)
+                    logger.info(f"[vertex] Retry {attempt}/{max_attempts-1} after {total_delay:.2f}s for {request_id}")
+                    await asyncio.sleep(total_delay)
                 
-        except asyncio.TimeoutError:
-            logger.error(f"Vertex FFC call timed out after {timeout}s")
-            raise
-        except Exception as e:
-            logger.error(f"Vertex FFC call failed: {e}")
-            raise
+                # Build contents for google-genai (just user message since system is in config)
+                contents = user_content  # google-genai accepts string directly
+                
+                response = await asyncio.wait_for(
+                    run_in_threadpool(
+                        self.genai_client.models.generate_content,
+                        model=model_name,
+                        contents=contents,
+                        config=generation_config  # Contains system instruction, tools, tool_config, safety settings
+                    ),
+                    timeout=timeout
+                )
+                
+                # Success - reset circuit breaker
+                if breaker.state == "half-open" or breaker.consecutive_failures > 0:
+                    logger.info(f"[vertex] Circuit breaker reset for {breaker_key}")
+                breaker.consecutive_failures = 0
+                breaker.state = "closed"
+                metadata["retry_count"] = attempt
+                break
+                    
+            except asyncio.TimeoutError:
+                logger.error(f"Vertex FFC call timed out after {timeout}s")
+                raise
+            except Exception as e:
+                error_str = str(e)
+                last_error = e
+                
+                # Check if it's a 503 error
+                if "503" in error_str or "UNAVAILABLE" in error_str:
+                    breaker.consecutive_failures += 1
+                    breaker.total_503_count += 1
+                    breaker.last_failure_time = datetime.now()
+                    
+                    metadata["upstream_status"] = 503
+                    metadata["upstream_error"] = "UNAVAILABLE"
+                    
+                    # Check if we should open the circuit
+                    if breaker.consecutive_failures >= 5:
+                        # Open circuit for 60-120 seconds
+                        hold_time = random.randint(60, 120)
+                        breaker.state = "open"
+                        breaker.open_until = datetime.now() + timedelta(seconds=hold_time)
+                        metadata["circuit_state"] = "open"
+                        metadata["breaker_open_reason"] = f"{breaker.consecutive_failures}_consecutive_503s"
+                        logger.error(f"[vertex] Circuit breaker opened for {breaker_key} after {breaker.consecutive_failures} consecutive 503s")
+                    
+                    if attempt < max_attempts - 1:
+                        logger.warning(f"[vertex] 503 error on attempt {attempt+1}/{max_attempts}: {error_str}")
+                        continue
+                else:
+                    # Non-503 error, don't retry
+                    logger.error(f"[vertex] Non-503 error: {error_str}")
+                    raise
+        
+        if response is None:
+            metadata["retry_count"] = max_attempts - 1
+            metadata["error_type"] = "service_unavailable_upstream"
+            raise last_error or Exception("All retry attempts failed")
+        
+        # Extract response text first
+        response_text = _extract_text_from_response(response)
         
         # Post-call verification
         grounded_effective = False
         schema_valid = False
         citations = []
+        annotations = []
         
         if is_grounded:
             # Check for grounding evidence
@@ -525,8 +749,8 @@ class VertexAdapter:
             if not grounded_effective:
                 metadata["why_not_grounded"] = "No GoogleSearch usage detected"
             
-            # Extract citations
-            citations, citation_telemetry = _extract_citations(response)
+            # Extract anchored citations
+            annotations, citations, citation_telemetry = _extract_anchored_citations(response, response_text)
             metadata.update(citation_telemetry)
         
         if is_json_mode and schema_function:
@@ -541,17 +765,29 @@ class VertexAdapter:
                 response_text = json.dumps(func_args)
             else:
                 metadata["schema_args_valid"] = False
-                response_text = _extract_text_from_response(response)
-        else:
-            response_text = _extract_text_from_response(response)
+                # response_text already extracted above
         
-        # Enforce REQUIRED mode post-hoc
+        # Enforce REQUIRED mode post-hoc (with relaxation for Google vendors)
         if grounding_mode == "REQUIRED":
-            if is_grounded and not grounded_effective:
-                raise GroundingRequiredFailedError(
-                    f"REQUIRED grounding mode specified but no grounding evidence found. "
-                    f"Tool calls: {metadata.get('tool_call_count', 0)}"
-                )
+            if is_grounded:
+                if metadata.get("anchored_citations_count", 0) > 0:
+                    # Prefer anchored citations
+                    metadata["required_pass_reason"] = "anchored_google"
+                elif grounded_effective:
+                    # Fall back to unlinked if tools ran
+                    tc = int(metadata.get("tool_call_count", 0) or 0)
+                    unlinked = int(metadata.get("unlinked_sources_count", 0) or 0)
+                    if tc > 0 and unlinked > 0:
+                        metadata["required_pass_reason"] = "unlinked_google"
+                    else:
+                        raise GroundingRequiredFailedError(
+                            f"REQUIRED grounding mode specified but no grounding evidence found. "
+                            f"Tool calls: {metadata.get('tool_call_count', 0)}"
+                        )
+                else:
+                    raise GroundingRequiredFailedError(
+                        f"REQUIRED grounding mode specified but no grounding detected."
+                    )
             if is_json_mode and not schema_valid:
                 raise ValueError(
                     f"REQUIRED mode specified but no valid schema function call found. "
@@ -565,8 +801,21 @@ class VertexAdapter:
         if hasattr(response, 'model_version'):
             metadata["modelVersion"] = response.model_version
         
+        # Add citations and annotations to metadata for telemetry compatibility
+        if citations:
+            metadata["citations"] = citations
+            metadata["citation_count"] = len(citations)
+        if annotations:
+            metadata["annotations"] = annotations
+        
+        # Add anchor extraction status
+        metadata["anchor_extraction_status"] = (
+            "available" if metadata.get('anchored_citations_count', 0) > 0 else "not_available"
+        )
+        
         return LLMResponse(
-            text=response_text,
+            content=response_text,
             metadata=metadata,
-            citations=citations if citations else None
+            citations=citations if citations else None,
+            annotations=annotations if annotations else None
         )

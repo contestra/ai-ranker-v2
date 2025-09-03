@@ -11,7 +11,10 @@ import random
 import asyncio
 import httpx
 import re
-from typing import Any, Dict, List, Optional
+import hashlib
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
+from typing import Any, Dict, List, Optional, Tuple
 from contextlib import asynccontextmanager
 from urllib.parse import urlparse, urlunparse, parse_qs
 from openai import AsyncOpenAI
@@ -43,6 +46,21 @@ from app.prometheus_metrics import (
 PROVIDER_MIN_OUTPUT_TOKENS = 16
 
 logger = logging.getLogger(__name__)
+
+# Circuit breaker state management
+@dataclass
+class OpenAICircuitBreakerState:
+    """Circuit breaker state for a specific model."""
+    consecutive_5xx: int = 0
+    consecutive_429: int = 0
+    last_failure_time: Optional[datetime] = None
+    state: str = "closed"  # closed, open, half-open
+    open_until: Optional[datetime] = None
+    total_5xx_count: int = 0
+    total_429_count: int = 0
+    
+# Global circuit breaker states per model
+_openai_circuit_breakers: Dict[str, OpenAICircuitBreakerState] = {}
 
 # Debug flag for citation extraction
 DEBUG_GROUNDING = os.getenv("DEBUG_GROUNDING", "false").lower() == "true"
@@ -1210,26 +1228,75 @@ class OpenAIAdapter:
             logger.debug(f"  Max output tokens: {params.get('max_output_tokens', 'not set')}")
         logger.info(f"[LLM_ROUTE] {json.dumps(route_info)}")
         
-        # Internal call function with error handling and timeout
+        # Generate stable request ID for idempotency
+        request_id = metadata.get("request_id") or f"req_{int(time.time()*1000)}_{random.randint(1000,9999)}"
+        metadata["request_id"] = request_id
         
+        # Check circuit breaker
+        breaker_key = f"openai:{model_name}"
+        breaker = _openai_circuit_breakers.get(breaker_key)
+        if not breaker:
+            breaker = OpenAICircuitBreakerState()
+            _openai_circuit_breakers[breaker_key] = breaker
+        
+        # Check if circuit is open
+        if breaker.state == "open":
+            if breaker.open_until and datetime.now() > breaker.open_until:
+                # Try half-open
+                breaker.state = "half-open"
+                logger.info(f"[openai] Circuit breaker half-open for {breaker_key}")
+            else:
+                # Fail fast
+                metadata["circuit_state"] = "open"
+                metadata["breaker_open_reason"] = "consecutive_5xx"
+                metadata["error_type"] = "service_unavailable_upstream"
+                raise Exception(f"Circuit breaker open for {breaker_key} until {breaker.open_until}")
+        
+        metadata["circuit_state"] = breaker.state
+        
+        # Internal call function with enhanced error handling
         async def _call(call_params):
             """
-            Robust call with parameter sanitation, 429 backoff/retry, and timeout logging.
+            Robust call with retries, circuit breaker, and proper error handling.
             """
-            max_attempts = int(os.getenv("OPENAI_RETRY_MAX_ATTEMPTS", "5"))
-            base_backoff = float(os.getenv("OPENAI_BACKOFF_BASE_SECONDS", "2"))
-            attempt = 0
-            while True:
-                attempt += 1
+            max_attempts = 4  # 1 initial + 3 retries for 5xx
+            base_delay = 0.5
+            last_error = None
+            
+            for attempt in range(max_attempts):
                 try:
+                    if attempt > 0:
+                        # Exponential backoff with jitter for retries
+                        delay = base_delay * (2 ** (attempt - 1))  # 0.5s, 1s, 2s, 4s
+                        jitter = random.uniform(0, delay * 0.5)
+                        total_delay = delay + jitter
+                        metadata["backoff_ms_last"] = int(total_delay * 1000)
+                        logger.info(f"[openai] Retry {attempt}/{max_attempts-1} after {total_delay:.2f}s for {request_id}")
+                        await asyncio.sleep(total_delay)
+                    
                     client_with_timeout = _client_for_call.with_options(timeout=timeout)
-                    return await client_with_timeout.responses.create(
+                    response = await client_with_timeout.responses.create(
                         **{k: v for k, v in call_params.items() if v is not None}
                     )
+                    
+                    # Success - reset circuit breaker
+                    if breaker.state == "half-open" or breaker.consecutive_5xx > 0:
+                        logger.info(f"[openai] Circuit breaker reset for {breaker_key}")
+                    breaker.consecutive_5xx = 0
+                    breaker.consecutive_429 = 0  
+                    breaker.state = "closed"
+                    metadata["retry_count"] = attempt
+                    
+                    return response
                 except Exception as e:
                     msg = str(e)
                     low = msg.lower()
-                    # Parameter sanitation
+                    last_error = e
+                    
+                    # Extract status code if available
+                    status_code = getattr(e, "status_code", None) or getattr(getattr(e, "response", None), "status_code", None)
+                    
+                    # Parameter sanitation (don't count as retry)
                     if "unexpected keyword argument" in msg or "unknown parameter" in low:
                         import re
                         m = re.search(r"'(\w+)'", msg)
@@ -1238,46 +1305,74 @@ class OpenAIAdapter:
                             logger.info(f"Removing unsupported parameter: {bad_param}")
                             call_params = dict(call_params)
                             call_params.pop(bad_param, None)
-                            attempt -= 1
-                            continue
-                    # 429 backoff
-                    if "rate limit" in low or "429" in low or "quota" in low:
+                            continue  # Don't count as attempt
+                    
+                    # Check for 5xx errors (retry with backoff)
+                    if status_code and status_code >= 500:
+                        breaker.consecutive_5xx += 1
+                        breaker.total_5xx_count += 1
+                        breaker.last_failure_time = datetime.now()
+                        
+                        metadata["upstream_status"] = status_code
+                        metadata["upstream_error"] = f"HTTP_{status_code}"
+                        
+                        # Check if we should open the circuit
+                        if breaker.consecutive_5xx >= 5:
+                            hold_time = random.randint(60, 120)
+                            breaker.state = "open"
+                            breaker.open_until = datetime.now() + timedelta(seconds=hold_time)
+                            metadata["circuit_state"] = "open"
+                            metadata["breaker_open_reason"] = f"{breaker.consecutive_5xx}_consecutive_5xx"
+                            logger.error(f"[openai] Circuit breaker opened for {breaker_key} after {breaker.consecutive_5xx} consecutive 5xx errors")
+                        
+                        if attempt < max_attempts - 1:
+                            logger.warning(f"[openai] {status_code} error on attempt {attempt+1}/{max_attempts}: {msg[:100]}")
+                            continue  # Retry
+                    
+                    # Check for network/timeout errors (retry with backoff)
+                    elif "timeout" in low or "timed out" in low or "connection" in low or "socket" in low:
+                        metadata["upstream_error"] = "network_error"
+                        if attempt < max_attempts - 1:
+                            logger.warning(f"[openai] Network error on attempt {attempt+1}/{max_attempts}: {msg[:100]}")
+                            continue  # Retry
+                    
+                    # 429 rate limit (special handling)
+                    elif "rate limit" in low or "429" in low or status_code == 429:
                         try:
                             _inc_rl_metric("openai")
                         except Exception:
                             pass
-                        if attempt >= max_attempts:
-                            raise RuntimeError(f"OPENAI_RATE_LIMIT_EXHAUSTED: {msg[:160]}") from e
                         
-                        # Use rate limiter's 429 handler
+                        breaker.consecutive_429 += 1
+                        breaker.total_429_count += 1
+                        metadata["upstream_status"] = 429
+                        metadata["upstream_error"] = "rate_limited"
+                        
+                        # Extract Retry-After header
                         retry_after = None
                         try:
                             retry_after = getattr(e, "retry_after", None)
                             if retry_after is not None:
                                 retry_after = float(retry_after)
+                            elif hasattr(e, "response") and hasattr(e.response, "headers"):
+                                retry_after_str = e.response.headers.get("retry-after")
+                                if retry_after_str:
+                                    retry_after = float(retry_after_str)
                         except Exception:
                             retry_after = None
                         
-                        # Let rate limiter handle the backoff and debt
+                        # Check if it's persistent quota issue
+                        if breaker.consecutive_429 >= 10:
+                            metadata["error_type"] = "rate_limited_quota"
+                            raise RuntimeError(f"RATE_LIMITED_QUOTA: Persistent 429 after {breaker.consecutive_429} attempts") from e
+                        
+                        # Let rate limiter handle the backoff
                         await _RL.handle_429(retry_after)
+                        
+                        # Don't count against max_attempts for 429
                         continue
-                    is_timeout = "timeout" in low or "timed out" in low
-                    timeout_info = {
-                        "vendor": "openai",
-                        "model": model_name,  # Use normalized model
-                        "vantage_policy": vantage_policy,
-                        "proxy_mode": "disabled",
-                        "country": "none",
-                        "grounded": request.grounded,
-                        "max_tokens": call_params.get("max_output_tokens", effective_tokens),
-                        "timeouts_s": {"connect": connect_s, "read": read_s, "total": total_s},
-                        "error_type": "timeout" if is_timeout else "error",
-                        "error_msg": msg[:200]
-                    }
-                    logger.error(f"[LLM_TIMEOUT] {json.dumps(timeout_info)}")
                     
-                    # Check if web_search is not supported for this model (400 path)
-                    low = msg.lower()
+                    # Check if web_search is not supported (don't retry for this)
                     if request.grounded and (
                         ("not supported" in low and "web_search" in low) or
                         ("hosted tool 'web_search'" in low and "not supported" in low) or
@@ -1373,7 +1468,14 @@ class OpenAIAdapter:
                             except Exception as retry_e:
                                 logger.warning(f"Preview retry failed: {retry_e}")
                     
-                    raise RuntimeError(f"OPENAI_CALL_FAILED: {msg[:160]}") from e
+                    # For other errors, don't retry (tool fallback, etc.)
+                    raise
+            
+            # If we exhausted all retries
+            if last_error:
+                metadata["retry_count"] = max_attempts - 1
+                metadata["error_type"] = "service_unavailable_upstream"
+                raise last_error
 
         
         # First attempt (with concurrency limiting)
@@ -1423,26 +1525,42 @@ class OpenAIAdapter:
                 # 'annotation' = anchored (url_citations in final message)
                 # 'web' or others = unlinked (from tool results)
                 anchored_count = sum(1 for c in citations if c.get('source_type') == 'annotation')
-                metadata["anchored_citations_count"] = anchored_count
-                metadata["unlinked_sources_count"] = len(citations) - anchored_count
+                metadata['anchored_citations_count'] = anchored_count
+                metadata['unlinked_sources_count'] = len(citations) - anchored_count
                 
                 if DEBUG_GROUNDING:
                     logger.debug(f"[CITATIONS] OpenAI: Extracted {len(citations)} citations, "
                                f"{url_citation_count} from url_citation annotations")
             
             # POST-HOC GROUNDING ENFORCEMENT for REQUIRED mode
-            # Prompt purity: enforcement happens here, not by modifying prompts
-            if grounding_mode == "REQUIRED" and not grounded_effective:
-                # In REQUIRED mode, grounding MUST be effective or we fail
-                error_msg = (
-                    f"REQUIRED grounding mode specified but no grounding evidence found. "
-                    f"Tool calls: {tool_call_count}, Web searches: {web_search_count}. "
-                    f"Response must include web search results when REQUIRED mode is set."
-                )
-                logger.error(f"[OPENAI_GROUNDING] {error_msg}")
-                metadata["required_grounding_failed"] = True
-                # Raise error for strict enforcement
-                raise GroundingRequiredFailedError(error_msg)
+            # Strict enforcement: web tool must be invoked AND citations must be produced
+            if grounding_mode == "REQUIRED":
+                if not grounded_effective:
+                    # Web tool was not invoked
+                    metadata["required_pass_reason"] = "REQUIRED_GROUNDING_MISSING"
+                    error_msg = (
+                        f"REQUIRED grounding mode: web search tool was not invoked. "
+                        f"Tool calls: {tool_call_count}, Web searches: {web_search_count}."
+                    )
+                    logger.error(f"[OPENAI_GROUNDING] {error_msg}")
+                    metadata["required_grounding_failed"] = True
+                    raise GroundingRequiredFailedError(error_msg)
+                    
+                # Check if anchored citations were produced
+                if grounded_effective and url_citation_count == 0:
+                    # Tool was invoked but no anchored citations produced
+                    metadata["required_pass_reason"] = "REQUIRED_GROUNDING_MISSING"
+                    error_msg = (
+                        f"REQUIRED grounding mode: web search executed but no anchored citations produced. "
+                        f"Tool calls: {tool_call_count}, URL citations: {url_citation_count}."
+                    )
+                    logger.error(f"[OPENAI_GROUNDING] {error_msg}")
+                    metadata["required_grounding_failed"] = True
+                    raise GroundingRequiredFailedError(error_msg)
+                    
+                # Success - anchored citations present
+                metadata["required_pass_reason"] = "anchored_openai"
+                metadata["anchored_citations_count"] = url_citation_count
         
         # Check if initial response had reasoning only
         if _had_reasoning_only(response):
@@ -1754,7 +1872,17 @@ class OpenAIAdapter:
         except Exception as _:
             pass
         
-        # Build response
+        # Add hash for immutability verification
+        try:
+            # Combine all messages for hash
+            messages_str = json.dumps(request.messages, sort_keys=True)
+            messages_hash = hashlib.sha256(messages_str.encode()).hexdigest()
+            metadata["messages_hash"] = messages_hash[:16]  # First 16 chars for brevity
+            metadata["model_identity"] = request.model
+        except Exception:
+            pass
+        
+        # Build response with comprehensive telemetry
         return LLMResponse(
             content=content,
             model_version=getattr(response, 'model', request.model),
@@ -1768,7 +1896,11 @@ class OpenAIAdapter:
             model=request.model,
             metadata=metadata,
             error_type=error_type,
-            error_message=error_message
+            error_message=error_message,
+            # Add top-level citations if available
+            citations=metadata.get("citations", []) if grounded_effective else [],
+            # Add annotations for anchored citations
+            annotations=[]  # TODO: Extract from url_citation annotations
         )
     
     def supports_model(self, model: str) -> bool:

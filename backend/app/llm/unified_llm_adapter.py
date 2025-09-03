@@ -30,6 +30,15 @@ GROUNDED_TIMEOUT = int(os.getenv("LLM_TIMEOUT_GR", "120"))
 # Global proxy kill-switch (default: disabled)
 DISABLE_PROXIES = os.getenv("DISABLE_PROXIES", "true").lower() in ("true", "1", "yes")
 
+# Feature flags
+# Route Gemini models via direct google-genai (instead of Vertex)
+USE_GEMINI_DIRECT = os.getenv("USE_GEMINI_DIRECT", "false").lower() in ("true","1","yes","on")
+# Relax REQUIRED for Google vendors (Vertex/Gemini-direct): allow pass when tool calls + unlinked URLs exist
+REQUIRED_RELAX_FOR_GOOGLE = os.getenv("REQUIRED_RELAX_FOR_GOOGLE", "false").lower() in ("true","1","yes","on")
+# Enable failover from Gemini Direct to Vertex on 503 errors
+GEMINI_DIRECT_FAILOVER_TO_VERTEX = os.getenv("GEMINI_DIRECT_FAILOVER_TO_VERTEX", "false").lower() in ("true","1","yes","on")
+
+
 
 class UnifiedLLMAdapter:
     """
@@ -46,6 +55,7 @@ class UnifiedLLMAdapter:
         # Lazy-init adapters to prevent boot failures when env vars missing
         self._openai_adapter = None
         self._vertex_adapter = None
+        self._gemini_adapter = None
         self.als_builder = ALSBuilder()
     
     @property
@@ -62,8 +72,14 @@ class UnifiedLLMAdapter:
         if self._vertex_adapter is None:
             from app.llm.adapters.vertex_adapter import VertexAdapter
             self._vertex_adapter = VertexAdapter()
-        return self._vertex_adapter
-    
+
+    @property
+    def gemini_adapter(self):
+        """Lazy-init Direct Gemini adapter on first use"""
+        if self._gemini_adapter is None:
+            from app.llm.adapters.gemini_adapter import GeminiAdapter
+            self._gemini_adapter = GeminiAdapter()
+        return self._gemini_adapter
     async def complete(
         self,
         request: LLMRequest,
@@ -102,7 +118,14 @@ class UnifiedLLMAdapter:
         # Normalize model
         request.model = normalize_model(request.vendor, request.model)
         
-        # Hard guardrails for allowed models
+        
+        def _bare_gemini_id(m: str) -> str:
+            if m.startswith("publishers/google/models/"):
+                m = m.split("publishers/google/models/", 1)[1]
+            if m.startswith("models/"):
+                m = m.split("models/", 1)[1]
+            return m
+# Hard guardrails for allowed models
         if request.vendor == "vertex":
             # Check against configurable allowlist
             allowed_models = os.getenv("ALLOWED_VERTEX_MODELS", 
@@ -140,7 +163,7 @@ class UnifiedLLMAdapter:
             raise ValueError(f"MODEL_NOT_ALLOWED: {error_msg}")
         
         # Step 3: Validate vendor
-        if request.vendor not in ("openai", "vertex"):
+        if request.vendor not in ("openai", "vertex", "gemini_direct"):
             raise ValueError(f"Unsupported vendor: {request.vendor}")
         
         # Step 3.5: Normalize vantage_policy - remove all proxy modes
@@ -176,9 +199,62 @@ class UnifiedLLMAdapter:
             logger.debug(f"[GROUNDING_ATTEMPT] Attempting grounded request: vendor={request.vendor}, "
                         f"model={request.model}, json_mode={getattr(request, 'json_mode', False)}")
         
+        # Track vendor path for failover
+        vendor_path = [request.vendor]
+        failover_applied = False
+        failover_reason = None
+        
         try:
             if request.vendor == "openai":
                 response = await self.openai_adapter.complete(request, timeout=timeout)
+            elif (
+                request.vendor == "gemini_direct"
+                or (
+                    request.vendor == "vertex"
+                    and USE_GEMINI_DIRECT
+                    and str(request.model).startswith(("publishers/google/models/gemini-", "models/gemini-", "gemini-"))
+                )
+            ):
+                try:
+                    response = await self.gemini_adapter.complete(request, timeout=timeout)
+                except Exception as e:
+                    error_str = str(e)
+                    # Check if it's a circuit breaker open error and failover is enabled
+                    if (
+                        GEMINI_DIRECT_FAILOVER_TO_VERTEX 
+                        and "Circuit breaker open" in error_str
+                        and request.vendor == "gemini_direct"
+                    ):
+                        # Attempt failover to Vertex
+                        logger.info(f"[FAILOVER] Attempting failover from gemini_direct to vertex due to circuit breaker")
+                        vendor_path.append("vertex")
+                        failover_applied = True
+                        failover_reason = "503_circuit_open"
+                        
+                        # Create a copy of the request for Vertex
+                        import copy
+                        vertex_req = copy.deepcopy(request)
+                        vertex_req.vendor = "vertex"
+                        
+                        # Ensure model format is correct for Vertex
+                        if not vertex_req.model.startswith("publishers/google/models/"):
+                            bare_model = vertex_req.model.replace("models/", "").replace("gemini-", "")
+                            if "gemini" not in bare_model:
+                                bare_model = f"gemini-{bare_model}"
+                            vertex_req.model = f"publishers/google/models/{bare_model}"
+                        
+                        response = await self.vertex_adapter.complete(vertex_req, timeout=timeout)
+                        
+                        # Add failover metadata
+                        if not hasattr(response, "metadata"):
+                            response.metadata = {}
+                        response.metadata["vendor_path"] = vendor_path
+                        response.metadata["failover_from"] = "gemini_direct"
+                        response.metadata["failover_to"] = "vertex"
+                        response.metadata["failover_reason"] = failover_reason
+                    else:
+                        # Re-raise if not a failover scenario
+                        raise
             else:  # vertex - NO SILENT FALLBACKS, auth errors should surface
                 response = await self.vertex_adapter.complete(request, timeout=timeout)
                 
@@ -261,8 +337,19 @@ class UnifiedLLMAdapter:
             
             # Check grounding effectiveness
             if hasattr(response, 'grounded_effective') and not response.grounded_effective:
-                grounding_failed = True
-                failure_reason = "Model did not invoke grounding tools"
+                # Relaxation for Google vendors if enabled
+                is_google_vendor = request.vendor in ("vertex", "gemini_direct")
+                tc = int((getattr(response, "metadata", {}) or {}).get("tool_call_count", 0) or 0)
+                m = response.metadata or {}
+                unlinked = int(m.get("unlinked_sources_count", (m.get("citation_count", 0) or 0) - (m.get("anchored_citations_count", 0) or 0)) or 0)
+                if is_google_vendor and REQUIRED_RELAX_FOR_GOOGLE and tc > 0 and unlinked > 0:
+                    grounding_failed = False
+                    if response.metadata is None:
+                        response.metadata = {}
+                    response.metadata["required_pass_reason"] = response.metadata.get("required_pass_reason") or "unlinked_google"
+                else:
+                    grounding_failed = True
+                    failure_reason = "Model did not invoke grounding tools"
             
             # Check for ANCHORED citations (unlinked-only is insufficient for REQUIRED)
             elif hasattr(response, 'metadata') and response.metadata:
@@ -499,11 +586,7 @@ class UnifiedLLMAdapter:
                 'als_nfc_length': request.metadata.get('als_nfc_length') if hasattr(request, 'metadata') else None,
                 
                 # Grounding fields - report actual requested mode
-                'grounding_mode_requested': (
-                    request.meta.get('grounding_mode') 
-                    if hasattr(request, 'meta') and isinstance(request.meta, dict) and request.meta.get('grounding_mode')
-                    else (getattr(request, 'grounding_mode', None) or ('AUTO' if getattr(request, 'grounded', False) else 'NONE'))
-                ),
+                'grounding_mode_requested': (getattr(request, 'grounding_mode', None) or ('AUTO' if getattr(request, 'grounded', False) else 'NONE')),
                 'grounded_effective': response.grounded_effective,
                 'tool_call_count': response.metadata.get('tool_call_count', 0) if hasattr(response, 'metadata') else 0,
                 'why_not_grounded': response.metadata.get('why_not_grounded') if hasattr(response, 'metadata') else None,
@@ -513,7 +596,20 @@ class UnifiedLLMAdapter:
                 'provider_api_version': response.metadata.get('provider_api_version') if hasattr(response, 'metadata') else None,
                 'region': response.metadata.get('region') if hasattr(response, 'metadata') else None,
                 
-                # Proxy normalization tracking
+                
+        # Direct Gemini allowlist (router is SSoT)
+        # is_gemini_model = str(request.model).startswith(("publishers/google/models/gemini-", "models/gemini-", "gemini-"))
+        # if request.vendor == "gemini_direct" or (request.vendor == "vertex" and USE_GEMINI_DIRECT and is_gemini_model):
+            # allowed_direct_csv = os.getenv("ALLOWED_GEMINI_DIRECT_MODELS", "")
+            # if allowed_direct_csv.strip():
+                # allowed_direct = { _bare_gemini_id(x.strip()) for x in allowed_direct_csv.split(",") if x.strip() }
+                # if _bare_gemini_id(request.model) not in allowed_direct:
+                    # raise ValueError(
+                        # f"Model not allowed for direct Gemini: {request.model}. "
+                        # f"Allowed (direct): {sorted(allowed_direct)}"
+                    # )
+            # If not configured, we fall back implicitly to Vertex allowlist above
+# Proxy normalization tracking
                 'vantage_policy_before': getattr(request, 'original_vantage_policy', None),
                 'vantage_policy_after': getattr(request, 'vantage_policy', 'ALS_ONLY'),
                 'proxies_normalized': getattr(request, 'proxy_normalization_applied', False),
@@ -532,6 +628,7 @@ class UnifiedLLMAdapter:
                 'citations_count': 0,  # Will be updated below
                 'anchored_citations_count': response.metadata.get('anchored_citations_count', 0) if hasattr(response, 'metadata') else 0,
                 'unlinked_sources_count': response.metadata.get('unlinked_sources_count', 0) if hasattr(response, 'metadata') else 0,
+                'required_pass_reason': response.metadata.get('required_pass_reason') if hasattr(response, 'metadata') else None,
                 
                 # Evidence availability flag
                 'grounded_evidence_unavailable': False,  # Will be set below if grounded but no anchored citations
