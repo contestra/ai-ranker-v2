@@ -25,7 +25,7 @@ from app.core.config import settings
 from app.llm.errors import GroundingRequiredFailedError
 from app.llm.types import LLMRequest, LLMResponse
 from app.llm.models import validate_model
-from app.llm.context_utils import detect_als_position
+# from app.llm.context_utils import detect_als_position  # Using local _detect_als_position instead
 
 logger = logging.getLogger(__name__)
 
@@ -434,13 +434,15 @@ class GeminiAdapter:
             if is_json:
                 schema_fn = _create_output_schema(req)
                 tools.append(Tool(function_declarations=[schema_fn]))
-            tool_cfg = {
-                "function_calling_config": {
-                    "mode": "ANY" if grounding_mode == "REQUIRED" else "AUTO"
+            # Only set function_calling_config if we have function declarations (JSON schema)
+            # GoogleSearch does not use function_calling_config
+            if is_json and schema_fn:
+                tool_cfg = {
+                    "function_calling_config": {
+                        "mode": "ANY" if grounding_mode == "REQUIRED" else "AUTO",
+                        "allowed_function_names": [schema_fn.name]
+                    }
                 }
-            }
-            if schema_fn:
-                tool_cfg["function_calling_config"]["allowed_function_names"] = [schema_fn.name]
 
         cfg = self._gen_cfg(req, system_text, tools if tools else None, tool_cfg)
 
@@ -615,7 +617,7 @@ class GeminiAdapter:
 
         # Usage estimation
         usage = {}
-        if settings.USAGE_ESTIMATION_ENABLED:
+        if getattr(settings, 'USAGE_ESTIMATION_ENABLED', False):
             try:
                 method = os.getenv("USAGE_ESTIMATE_METHOD", "char4")
                 pad = float(os.getenv("USAGE_ESTIMATE_PAD", "1.15"))
@@ -650,6 +652,10 @@ class GeminiAdapter:
             "available" if metadata.get('anchored_citations_count', 0) > 0 else "not_available"
         )
 
+        # Store annotations in metadata if present
+        if annotations:
+            metadata["annotations"] = annotations
+            
         return LLMResponse(
             content=response_text,
             model_version=getattr(resp, "model", req.model),
@@ -663,7 +669,6 @@ class GeminiAdapter:
             model=req.model,
             metadata=metadata,
             citations=citations if citations else None,
-            annotations=annotations if annotations else None,
             error_type=None if response_text else "EMPTY_COMPLETION",
-            error_detail=None if response_text else "No completion generated"
+            error_message=None if response_text else "No completion generated"
         )

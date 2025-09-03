@@ -813,9 +813,23 @@ class VertexAdapter:
             "available" if metadata.get('anchored_citations_count', 0) > 0 else "not_available"
         )
         
+        # Store annotations in metadata if present
+        if annotations:
+            metadata["annotations"] = annotations
+            
         return LLMResponse(
             content=response_text,
+            model_version=getattr(response, '_model_id', req.model),
+            model_fingerprint=None,
+            grounded_effective=grounded_effective,
+            usage=usage,
+            latency_ms=elapsed_ms,
+            raw_response=None,
+            success=bool(response_text),
+            vendor='vertex',
+            model=req.model,
             metadata=metadata,
             citations=citations if citations else None,
-            annotations=annotations if annotations else None
+            error_type=None if response_text else "EMPTY_COMPLETION",
+            error_message=None if response_text else "No completion generated"
         )

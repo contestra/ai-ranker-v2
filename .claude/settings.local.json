@@ -12,7 +12,16 @@
       "Bash(timeout 30 python3 test_gpt5_direct_responses.py)",
       "Bash(timeout 120 python3 test_gpt5_citations.py)",
       "Bash(timeout 120 python3 test_gpt5_direct_responses.py)",
-      "Bash(timeout 120 python3 test_gpt5_complete_response.py)"
+      "Bash(timeout 120 python3 test_gpt5_complete_response.py)",
+      "Bash(gcloud auth list:*)",
+      "Bash(gcloud config get-value:*)",
+      "Bash(gcloud auth application-default print-access-token:*)",
+      "Bash(pip3 install:*)",
+      "Read(/usr/bin/**)",
+      "Bash(timeout 60 python:*)",
+      "Bash(timeout 120 python3 test_adapters_properly.py)",
+      "Bash(OAI_DISABLE_LIMITER=1 python3 test_adapters_properly.py)",
+      "Bash(OAI_DISABLE_LIMITER=1 python3 test_adapters_chat.py)"
     ],
     "deny": [],
     "ask": [],

@@ -27,7 +27,8 @@ VERTEX_ALLOWED_MODELS = {
     "publishers/google/models/gemini-2.0-flash"
 }
 
-# Default Vertex model
+# Default Vertex model  
+# Note: For Gemini Direct, this will be normalized to "gemini-2.5-pro"
 VERTEX_DEFAULT_MODEL = "publishers/google/models/gemini-2.5-pro"
 
 # Model validation messages
@@ -46,7 +47,8 @@ def validate_model(vendor: str, model: str) -> tuple[bool, str]:
             return True, ""
         return False, MODEL_NOT_ALLOWED_MESSAGES["openai"]
     
-    elif vendor == "vertex":
+    elif vendor == "vertex" or vendor == "gemini_direct":
+        # Gemini Direct uses same models as Vertex
         if model in VERTEX_ALLOWED_MODELS:
             return True, ""
         return False, MODEL_NOT_ALLOWED_MESSAGES["vertex"]
@@ -63,7 +65,7 @@ def normalize_model(vendor: str, model: str = None) -> str:
         # No remapping - use model as specified
         return model
     
-    elif vendor == "vertex":
+    elif vendor == "vertex" or vendor == "gemini_direct":
         # Always force the canonical Vertex model
         return VERTEX_DEFAULT_MODEL
     
