@@ -22,7 +22,17 @@
       "Bash(timeout 120 python3 test_adapters_properly.py)",
       "Bash(OAI_DISABLE_LIMITER=1 python3 test_adapters_properly.py)",
       "Bash(OAI_DISABLE_LIMITER=1 python3 test_adapters_chat.py)",
-      "Bash(OAI_DISABLE_LIMITER=1 timeout 180 python3 test_adapters_properly.py)"
+      "Bash(OAI_DISABLE_LIMITER=1 timeout 180 python3 test_adapters_properly.py)",
+      "Bash(timeout 180 python3 test_openai_grounded_no_als.py)",
+      "Bash(timeout 90 python3:*)",
+      "Bash(timeout 30 python3 test_debug_response.py)",
+      "Bash(timeout 180 python3 test_systematic_debug.py)",
+      "Bash(timeout 30 python3 test_no_tools_field.py)",
+      "Bash(timeout 30 python3:*)",
+      "Bash(timeout 120 python3 test_gpt5_acceptance.py)",
+      "Bash(timeout 120 python3:*)",
+      "Bash(timeout 180 python3 test_gpt4_gpt5_grounded_health.py)",
+      "Bash(cp:*)"
     ],
     "deny": [],
     "ask": [],
