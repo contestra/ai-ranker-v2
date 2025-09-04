@@ -103,12 +103,8 @@ class OpenAIAdapter:
             }
             
             # Tool choice for grounding mode
-            grounding_mode = request.meta.get("grounding_mode", "AUTO") if request.meta else "AUTO"
-            if grounding_mode == "REQUIRED":
-                # Note: API may not support non-auto, will handle error
-                payload["tool_choice"] = "required"
-            else:
-                payload["tool_choice"] = "auto"
+            # Note: web_search only supports "auto" tool_choice
+            payload["tool_choice"] = "auto"
         else:
             # Ungrounded: no tools
             payload = {

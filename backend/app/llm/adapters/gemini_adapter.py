@@ -224,11 +224,13 @@ class GeminiAdapter:
         model_id = request.model
         if model_id.startswith("models/"):
             model_id = model_id.replace("models/", "")
+        elif model_id.startswith("publishers/google/models/"):
+            model_id = model_id.replace("publishers/google/models/", "")
         
         # Note: Flash models are allowed through Gemini Direct API
         # The router will handle policy decisions about which models to use
         
-        is_valid, error_msg = validate_model("gemini_direct", f"models/{model_id}")
+        is_valid, error_msg = validate_model("gemini_direct", f"publishers/google/models/{model_id}")
         if not is_valid:
             raise ValueError(f"Invalid Gemini model: {error_msg}")
         
@@ -260,11 +262,32 @@ class GeminiAdapter:
         else:
             max_tokens = min(max_tokens, GEMINI_MAX_OUTPUT_TOKENS)
         
+        # Safety settings
+        safety_settings = [
+            SafetySetting(
+                category=HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+                threshold=HarmBlockThreshold.BLOCK_ONLY_HIGH
+            ),
+            SafetySetting(
+                category=HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+                threshold=HarmBlockThreshold.BLOCK_ONLY_HIGH
+            ),
+            SafetySetting(
+                category=HarmCategory.HARM_CATEGORY_HARASSMENT,
+                threshold=HarmBlockThreshold.BLOCK_ONLY_HIGH
+            ),
+            SafetySetting(
+                category=HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+                threshold=HarmBlockThreshold.BLOCK_ONLY_HIGH
+            )
+        ]
+        
         gen_config = GenerateContentConfig(
             max_output_tokens=max_tokens,
             temperature=request.temperature if hasattr(request, 'temperature') else 0.7,
             top_p=request.top_p if hasattr(request, 'top_p') else 0.95,
-            response_mime_type="text/plain"
+            response_mime_type="text/plain",
+            safety_settings=safety_settings
         )
         
         # Add thinking configuration if supported
@@ -287,43 +310,21 @@ class GeminiAdapter:
                 gen_config.response_mime_type = "application/json"
                 gen_config.response_schema = json_schema['schema']
         
-        # Safety settings
-        safety_settings = [
-            SafetySetting(
-                category=HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
-                threshold=HarmBlockThreshold.BLOCK_ONLY_HIGH
-            ),
-            SafetySetting(
-                category=HarmCategory.HARM_CATEGORY_HATE_SPEECH,
-                threshold=HarmBlockThreshold.BLOCK_ONLY_HIGH
-            ),
-            SafetySetting(
-                category=HarmCategory.HARM_CATEGORY_HARASSMENT,
-                threshold=HarmBlockThreshold.BLOCK_ONLY_HIGH
-            ),
-            SafetySetting(
-                category=HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
-                threshold=HarmBlockThreshold.BLOCK_ONLY_HIGH
-            )
-        ]
-        
         # Handle grounding
-        tools = []
-        tool_config = None
         grounding_mode = None
         
         if request.grounded:
             grounding_mode = request.meta.get("grounding_mode", "AUTO") if hasattr(request, 'meta') and request.meta else "AUTO"
             metadata["grounding_mode_requested"] = grounding_mode
             
-            # Add GoogleSearch tool
-            tools = [Tool(google_search=GoogleSearch())]
+            # Add GoogleSearch tool to config
+            gen_config.tools = [Tool(google_search=GoogleSearch())]
             metadata["web_tool_type"] = "google_search"
             
             # Configure tool calling based on mode
             if grounding_mode == "REQUIRED":
                 # Force function calling for REQUIRED mode
-                tool_config = ToolConfig(
+                gen_config.tool_config = ToolConfig(
                     function_calling_config=FunctionCallingConfig(
                         mode="ANY",
                         allowed_function_names=["google_search"]
@@ -332,7 +333,7 @@ class GeminiAdapter:
                 metadata["grounding_mode_enforced"] = "FFC_ANY"
             else:
                 # AUTO mode - let model decide
-                tool_config = ToolConfig(
+                gen_config.tool_config = ToolConfig(
                     function_calling_config=FunctionCallingConfig(mode="AUTO")
                 )
         
@@ -341,10 +342,7 @@ class GeminiAdapter:
             response = await self.client.aio.models.generate_content(
                 model=f"models/{model_id}",
                 contents=shaped_messages,
-                config=gen_config,
-                safety_settings=safety_settings,
-                tools=tools if tools else None,
-                tool_config=tool_config if tool_config else None
+                config=gen_config
             )
             
             # Extract content
