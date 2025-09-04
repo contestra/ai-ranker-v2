@@ -1,0 +1,62 @@
+[
+  {
+    "adapter": "openai/gpt-5-2025-08-07",
+    "grounded": false,
+    "success": true,
+    "elapsed": 0.00037,
+    "content_length": 0,
+    "content": "",
+    "citations": null,
+    "metadata": null
+  },
+  {
+    "adapter": "openai/gpt-5-2025-08-07",
+    "grounded": true,
+    "success": true,
+    "elapsed": 0.000246,
+    "content_length": 0,
+    "content": "",
+    "citations": null,
+    "metadata": null
+  },
+  {
+    "adapter": "gemini_direct/gemini-2.5-pro",
+    "grounded": false,
+    "success": true,
+    "elapsed": 0.003666,
+    "content_length": 0,
+    "content": "",
+    "citations": null,
+    "metadata": null
+  },
+  {
+    "adapter": "gemini_direct/gemini-2.5-pro",
+    "grounded": true,
+    "success": true,
+    "elapsed": 0.000234,
+    "content_length": 0,
+    "content": "",
+    "citations": null,
+    "metadata": null
+  },
+  {
+    "adapter": "vertex/gemini-2.5-pro",
+    "grounded": false,
+    "success": true,
+    "elapsed": 0.000224,
+    "content_length": 0,
+    "content": "",
+    "citations": null,
+    "metadata": null
+  },
+  {
+    "adapter": "vertex/gemini-2.5-pro",
+    "grounded": true,
+    "success": true,
+    "elapsed": 0.000232,
+    "content_length": 0,
+    "content": "",
+    "citations": null,
+    "metadata": null
+  }
+]

@@ -274,8 +274,10 @@ class UnifiedLLMAdapter:
         
         return None
     
-    def _check_pacing(self, vendor: str, model: str) -> Optional[str]:
-        """Check if request should be paced based on previous rate limits."""
+    def _check_pacing(self, vendor: str, model: str) -> float:
+        """Check if request should be paced based on previous rate limits.
+        Returns: delay in seconds to wait (0 if no pacing needed)
+        """
         pace_key = f"{vendor}:{model}"
         
         if pace_key in self._next_allowed_at:
@@ -283,10 +285,10 @@ class UnifiedLLMAdapter:
             now = time.time()
             
             if now < next_allowed:
-                wait_time = int(next_allowed - now)
-                return f"Router pacing: wait {wait_time}s before next request to {pace_key}"
+                wait_time = next_allowed - now
+                return wait_time
         
-        return None
+        return 0.0
     
     def _update_pacing(self, vendor: str, model: str, error: Exception):
         """Update pacing based on rate limit errors."""

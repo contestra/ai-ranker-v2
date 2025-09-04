@@ -1,0 +1,38 @@
+[
+  {
+    "adapter": "openai/gpt-5-2025-08-07",
+    "grounded": false,
+    "success": false,
+    "error": "'>' not supported between instances of 'NoneType' and 'int'"
+  },
+  {
+    "adapter": "openai/gpt-5-2025-08-07",
+    "grounded": true,
+    "success": false,
+    "error": "'>' not supported between instances of 'NoneType' and 'int'"
+  },
+  {
+    "adapter": "gemini_direct/gemini-2.5-pro",
+    "grounded": false,
+    "success": false,
+    "error": "'>' not supported between instances of 'NoneType' and 'int'"
+  },
+  {
+    "adapter": "gemini_direct/gemini-2.5-pro",
+    "grounded": true,
+    "success": false,
+    "error": "'>' not supported between instances of 'NoneType' and 'int'"
+  },
+  {
+    "adapter": "vertex/gemini-2.5-pro",
+    "grounded": false,
+    "success": false,
+    "error": "'>' not supported between instances of 'NoneType' and 'int'"
+  },
+  {
+    "adapter": "vertex/gemini-2.5-pro",
+    "grounded": true,
+    "success": false,
+    "error": "'>' not supported between instances of 'NoneType' and 'int'"
+  }
+]

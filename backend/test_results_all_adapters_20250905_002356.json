@@ -1,0 +1,86 @@
+[
+  {
+    "adapter": "OpenAI/GPT-5",
+    "vendor": "openai",
+    "model": "gpt-5-2025-08-07",
+    "grounded": false,
+    "als_context": {
+      "country_code": "DE",
+      "locale": "de-DE",
+      "detected_location": "Berlin, Germany"
+    },
+    "success": false,
+    "error": "'>' not supported between instances of 'NoneType' and 'int'",
+    "elapsed_seconds": 0
+  },
+  {
+    "adapter": "OpenAI/GPT-5",
+    "vendor": "openai",
+    "model": "gpt-5-2025-08-07",
+    "grounded": true,
+    "als_context": {
+      "country_code": "DE",
+      "locale": "de-DE",
+      "detected_location": "Berlin, Germany"
+    },
+    "success": false,
+    "error": "'>' not supported between instances of 'NoneType' and 'int'",
+    "elapsed_seconds": 0
+  },
+  {
+    "adapter": "Gemini Direct",
+    "vendor": "gemini_direct",
+    "model": "gemini-2.5-pro",
+    "grounded": false,
+    "als_context": {
+      "country_code": "DE",
+      "locale": "de-DE",
+      "detected_location": "Berlin, Germany"
+    },
+    "success": false,
+    "error": "'>' not supported between instances of 'NoneType' and 'int'",
+    "elapsed_seconds": 0
+  },
+  {
+    "adapter": "Gemini Direct",
+    "vendor": "gemini_direct",
+    "model": "gemini-2.5-pro",
+    "grounded": true,
+    "als_context": {
+      "country_code": "DE",
+      "locale": "de-DE",
+      "detected_location": "Berlin, Germany"
+    },
+    "success": false,
+    "error": "'>' not supported between instances of 'NoneType' and 'int'",
+    "elapsed_seconds": 0
+  },
+  {
+    "adapter": "Vertex/Gemini",
+    "vendor": "vertex",
+    "model": "gemini-2.5-pro",
+    "grounded": false,
+    "als_context": {
+      "country_code": "DE",
+      "locale": "de-DE",
+      "detected_location": "Berlin, Germany"
+    },
+    "success": false,
+    "error": "'>' not supported between instances of 'NoneType' and 'int'",
+    "elapsed_seconds": 0
+  },
+  {
+    "adapter": "Vertex/Gemini",
+    "vendor": "vertex",
+    "model": "gemini-2.5-pro",
+    "grounded": true,
+    "als_context": {
+      "country_code": "DE",
+      "locale": "de-DE",
+      "detected_location": "Berlin, Germany"
+    },
+    "success": false,
+    "error": "'>' not supported between instances of 'NoneType' and 'int'",
+    "elapsed_seconds": 0
+  }
+]
