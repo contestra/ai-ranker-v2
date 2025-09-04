@@ -152,8 +152,10 @@ def _detect_als_position(messages: List[Dict[str, str]], als_country: Optional[s
     return -1
 
 
-def _shape_messages_for_gemini(messages: List[Dict[str, str]], als_position: int = -1) -> List[Dict[str, Any]]:
-    """Shape messages for Gemini API (system + user only)."""
+def _extract_system_and_user_messages(messages: List[Dict[str, str]], als_position: int = -1) -> Tuple[Optional[str], List[Dict[str, Any]]]:
+    """Extract system instruction and format user messages for Gemini API.
+    Returns: (system_instruction, user_messages)
+    """
     system_content = None
     user_content = None
     
@@ -179,27 +181,15 @@ def _shape_messages_for_gemini(messages: List[Dict[str, str]], als_position: int
                 else:
                     user_content += "\n" + content
     
-    # Build final messages
-    result = []
-    if system_content:
-        result.append({
-            "role": "user",
-            "parts": [{"text": f"System: {system_content}"}]
-        })
-    
+    # Build user messages only (no fake system turns)
+    user_messages = []
     if user_content:
-        if result:
-            # If we have system message, append user as second turn
-            result.append({
-                "role": "model",
-                "parts": [{"text": "I understand the system instructions. How can I help you?"}]
-            })
-        result.append({
+        user_messages.append({
             "role": "user",
             "parts": [{"text": user_content}]
         })
     
-    return result
+    return system_content, user_messages
 
 
 class GeminiAdapter:
@@ -252,8 +242,8 @@ class GeminiAdapter:
             als_country = request.metadata.get('als_country')
         als_position = _detect_als_position(request.messages, als_country)
         
-        # Shape messages for Gemini
-        shaped_messages = _shape_messages_for_gemini(request.messages, als_position)
+        # Extract system instruction and user messages
+        system_instruction, user_messages = _extract_system_and_user_messages(request.messages, als_position)
         
         # Build generation config
         max_tokens = request.max_tokens or 1024
@@ -287,7 +277,8 @@ class GeminiAdapter:
             temperature=request.temperature if hasattr(request, 'temperature') else 0.7,
             top_p=request.top_p if hasattr(request, 'top_p') else 0.95,
             response_mime_type="text/plain",
-            safety_settings=safety_settings
+            safety_settings=safety_settings,
+            system_instruction=system_instruction  # Add system instruction to config
         )
         
         # Add thinking configuration if supported
@@ -373,7 +364,7 @@ class GeminiAdapter:
         try:
             response = await self.client.aio.models.generate_content(
                 model=f"models/{model_id}",
-                contents=shaped_messages,
+                contents=user_messages,
                 config=gen_config
             )
             

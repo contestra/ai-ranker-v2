@@ -258,10 +258,10 @@ class VertexAdapter:
         ]
         
         gen_config = GenerateContentConfig(
-            maxOutputTokens=max_tokens,
+            max_output_tokens=max_tokens,
             temperature=request.temperature if hasattr(request, 'temperature') else 0.7,
-            topP=request.top_p if hasattr(request, 'top_p') else 0.95,
-            systemInstruction=system_content,
+            top_p=request.top_p if hasattr(request, 'top_p') else 0.95,
+            system_instruction=system_content,
             safety_settings=safety_settings
         )
         

@@ -14,8 +14,10 @@ The OpenAI adapter has been refactored to be lean and focused, delegating all tr
 - **Responses API Only**: Uses OpenAI's Responses API exclusively (no Chat Completions)
 - **SDK-Managed Transport**: Retries, backoff, rate limiting handled by SDK
 - **Grounding Support**: AUTO and REQUIRED modes with web_search tool
+- **Citation Extraction**: Properly extracts citations from web_search_call results
 - **TextEnvelope Fallback**: Handles GPT-5 empty text quirk
 - **Tool Negotiation**: Automatically falls back from web_search to web_search_preview
+- **Respects Caller Limits**: Honors request.max_tokens, defaults to 6000 (grounded) or 1024 (ungrounded)
 
 ### Configuration
 Environment variables:
@@ -68,8 +70,31 @@ The adapter follows these principles:
 ## Vertex Adapter
 Handles Google Vertex AI models (Gemini family).
 
+### Key Features
+- **Snake-case Config**: Uses proper snake_case field names (max_output_tokens, system_instruction, top_p)
+- **System Instruction**: Uses system_instruction field in config for clean prompt separation
+- **FFC for Grounded+JSON**: Uses Forced Function Calling with schema-as-tool when both grounded and JSON are requested
+- **SDK-Managed Transport**: All retries and backoff handled by the Google GenAI SDK
+
+### Configuration
+- `VERTEX_PROJECT`: Google Cloud project ID
+- `VERTEX_LOCATION`: Region (default: europe-west4)  
+- `VERTEX_MAX_OUTPUT_TOKENS`: Max output tokens (default: 8192)
+- `VERTEX_GROUNDED_MAX_TOKENS`: Max tokens for grounded requests (default: 6000)
+
 ## Gemini Adapter  
 Direct Gemini API integration.
+
+### Key Features
+- **Clean Prompts**: Uses system_instruction field instead of synthetic "System:" user messages
+- **No Fake Turns**: No more "I understand..." model responses injected
+- **FFC for Grounded+JSON**: Uses Forced Function Calling with schema-as-tool when both grounded and JSON are requested
+- **SDK-Managed Transport**: All retries handled by the Google GenAI SDK
+
+### Configuration
+- `GEMINI_API_KEY`: API key for authentication
+- `GEMINI_MAX_OUTPUT_TOKENS`: Max output tokens (default: 8192)
+- `GEMINI_GROUNDED_MAX_TOKENS`: Max tokens for grounded requests (default: 6000)
 
 ## CI Protection
 The `ci_adapter_guard.py` script runs in CI to prevent reintroduction of banned patterns:
