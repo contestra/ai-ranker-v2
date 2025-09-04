@@ -90,11 +90,10 @@ class OpenAIAdapter:
         
         # Base payload
         effective_model = self._map_model(request.model)
-        max_tokens = request.max_tokens or 1024
         
         if is_grounded:
-            # Grounded: include tools and use higher token limit
-            max_tokens = GROUNDED_MAX_OUTPUT_TOKENS
+            # Grounded: respect caller's max_tokens if provided, otherwise use grounded default
+            max_tokens = min(request.max_tokens or GROUNDED_MAX_OUTPUT_TOKENS, GROUNDED_MAX_OUTPUT_TOKENS)
             payload = {
                 "model": effective_model,
                 "input": input_messages,
@@ -106,7 +105,8 @@ class OpenAIAdapter:
             # Note: web_search only supports "auto" tool_choice
             payload["tool_choice"] = "auto"
         else:
-            # Ungrounded: no tools
+            # Ungrounded: respect caller's max_tokens if provided, otherwise use default
+            max_tokens = request.max_tokens or 1024
             payload = {
                 "model": effective_model,
                 "input": input_messages,
@@ -200,6 +200,41 @@ class OpenAIAdapter:
         
         return count, types
     
+    def _extract_citations(self, response: Any) -> List[Dict[str, Any]]:
+        """Extract citations from web_search_call items in response.
+        Returns: List of citation dicts with url, title, domain
+        """
+        citations = []
+        seen_urls = set()
+        
+        if hasattr(response, 'output') and isinstance(response.output, list):
+            for item in response.output:
+                # Look for web_search_call or web_search_preview_call items
+                if hasattr(item, 'type') and 'search' in item.type and 'call' in item.type:
+                    # Extract search results if available
+                    if hasattr(item, 'search_results') and isinstance(item.search_results, list):
+                        for result in item.search_results:
+                            url = getattr(result, 'url', None)
+                            if url and url not in seen_urls:
+                                seen_urls.add(url)
+                                
+                                # Extract domain from URL
+                                try:
+                                    from urllib.parse import urlparse
+                                    parsed = urlparse(url)
+                                    domain = parsed.netloc.lower().replace('www.', '')
+                                except:
+                                    domain = 'unknown'
+                                
+                                citations.append({
+                                    'url': url,
+                                    'title': getattr(result, 'title', ''),
+                                    'domain': domain,
+                                    'source_type': 'web_search'
+                                })
+        
+        return citations
+    
     async def complete(self, request: LLMRequest, timeout: int = 60) -> LLMResponse:
         """Complete request using Responses API only."""
         start_time = time.perf_counter()
@@ -285,9 +320,13 @@ class OpenAIAdapter:
                     metadata["fallback_used"] = False
             
             # Extract content for grounded (or use ungrounded result)
+            citations = []
             if is_grounded:
                 content, source = self._extract_content(response)
                 metadata["fallback_used"] = False
+                # Extract citations from web search results
+                citations = self._extract_citations(response)
+                metadata["citation_count"] = len(citations)
             
             metadata["text_source"] = source
             
@@ -318,7 +357,7 @@ class OpenAIAdapter:
                 vendor="openai",
                 model=request.model,
                 metadata=metadata,
-                citations=[]
+                citations=citations
             )
             
         except GroundingRequiredFailedError:
