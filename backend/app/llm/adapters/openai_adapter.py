@@ -1,19 +1,15 @@
 """
-OpenAI Adapter with proper Responses API implementation for web search.
+OpenAI Adapter - Lean implementation using Responses API only.
+Focuses on shape conversion, policy enforcement, and telemetry.
+Transport/retries/backoff handled by SDK.
 """
-import asyncio
-import hashlib
 import json
 import logging
 import os
-import random
 import time
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Set, Tuple
-from urllib.parse import urlparse
+from datetime import datetime
+from typing import Any, Dict, List, Optional, Tuple
 
-import httpx
 from openai import AsyncOpenAI
 
 from app.core.config import get_settings
@@ -24,215 +20,110 @@ from app.llm.types import LLMRequest, LLMResponse
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
-# Environment-based isolation flags
-DISABLE_LIMITER = os.getenv("OAI_DISABLE_LIMITER", "0") == "1"
-DISABLE_CUSTOM_SESSION = os.getenv("OAI_DISABLE_CUSTOM_SESSION", "0") == "1"
-DISABLE_STREAMING = os.getenv("OAI_DISABLE_STREAMING", "0") == "1"
+# Environment configuration
+OPENAI_MAX_RETRIES = int(os.getenv("OPENAI_MAX_RETRIES", "5"))
+OPENAI_TIMEOUT_SECONDS = int(os.getenv("OPENAI_TIMEOUT_SECONDS", "60"))
+GROUNDED_MAX_OUTPUT_TOKENS = int(os.getenv("OPENAI_GROUNDED_MAX_TOKENS", "6000"))
+MIN_OUTPUT_TOKENS = 16  # Responses API minimum
 
-# Default max tokens for grounded runs
-GROUNDED_MAX_TOKENS = int(os.getenv("OAI_GROUNDED_MAX_TOKENS", "6000"))
-
-# Circuit breaker state
-@dataclass
-class CircuitBreakerState:
-    """Circuit breaker state for a specific vendor+model combination."""
-    consecutive_failures: int = 0
-    last_failure_time: Optional[datetime] = None
-    state: str = "closed"  # closed, open, half-open
-    open_until: Optional[datetime] = None
-    consecutive_429: int = 0
-    consecutive_503: int = 0
-    total_503_count: int = 0
-    total_429_count: int = 0
-
-# Global circuit breaker states
-_circuit_breakers: Dict[str, CircuitBreakerState] = {}
-
-# Health check cache
-_health_check_done = False
-_health_check_success = False
-
-
-class SimplifiedRateLimiter:
-    """Simplified rate limiter with deadlock protection."""
-    
-    def __init__(self):
-        self._enabled = not DISABLE_LIMITER and settings.openai_gate_in_adapter
-        self._sem = None
-        if self._enabled:
-            max_concurrency = max(1, settings.openai_max_concurrency)
-            self._sem = asyncio.Semaphore(max_concurrency)
-            logger.info(f"[OAI_RL] Rate limiter enabled with {max_concurrency} concurrent slots")
-        else:
-            logger.info("[OAI_RL] Rate limiter disabled")
-    
-    async def acquire_with_timeout(self, timeout_sec: float = 1.0):
-        """Acquire permit with timeout to prevent deadlock."""
-        if not self._enabled or not self._sem:
-            return None
-            
-        try:
-            # Try to acquire with timeout
-            await asyncio.wait_for(self._sem.acquire(), timeout=timeout_sec)
-            return self._sem
-        except asyncio.TimeoutError:
-            logger.warning(f"[OAI_RL] Failed to acquire permit within {timeout_sec}s, bypassing limiter")
-            return None
-    
-    def release(self, sem):
-        """Release permit if acquired."""
-        if sem:
-            try:
-                sem.release()
-            except Exception as e:
-                logger.warning(f"[OAI_RL] Failed to release permit: {e}")
-
-
-# Global rate limiter instance
-_RL = SimplifiedRateLimiter()
+# TextEnvelope schema for ungrounded fallback (GPT-5 empty text quirk)
+TEXT_ENVELOPE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "content": {"type": "string"}
+    },
+    "required": ["content"],
+    "additionalProperties": False
+}
 
 
 class OpenAIAdapter:
-    """OpenAI adapter with proper Responses API and timeout fixes."""
+    """Lean OpenAI adapter using Responses API exclusively."""
     
     def __init__(self):
-        # API Key required
-        api_key = os.getenv("OPENAI_API_KEY")
+        """Initialize with SDK-managed client."""
+        api_key = os.getenv("OPENAI_API_KEY") or settings.openai_api_key
         if not api_key:
-            raise RuntimeError("OPENAI_API_KEY required - set in backend/.env")
+            raise ValueError("OpenAI API key not configured")
         
-        # Log isolation flags
-        logger.info(f"[OAI_INIT] Isolation flags: LIMITER={not DISABLE_LIMITER}, CUSTOM_SESSION={not DISABLE_CUSTOM_SESSION}, STREAMING={not DISABLE_STREAMING}")
+        # Let SDK handle all transport concerns
+        self.client = AsyncOpenAI(
+            api_key=api_key,
+            max_retries=OPENAI_MAX_RETRIES,
+            timeout=OPENAI_TIMEOUT_SECONDS
+        )
         
-        # Configure timeouts
-        connect_s = float(os.getenv("OPENAI_CONNECT_TIMEOUT_MS", "2000")) / 1000.0
-        read_s = float(os.getenv("OPENAI_READ_TIMEOUT_MS", "60000")) / 1000.0
-        
-        # Create client
-        if DISABLE_CUSTOM_SESSION:
-            # Use SDK defaults
-            self.client = AsyncOpenAI(api_key=api_key)
-            logger.info("[OAI_INIT] Using SDK default HTTP client")
-        else:
-            # Custom timeout config
-            self.client = AsyncOpenAI(
-                api_key=api_key,
-                timeout=httpx.Timeout(
-                    connect=connect_s,
-                    read=read_s,
-                    write=read_s,
-                    pool=read_s
-                )
-            )
-            logger.info(f"[OAI_INIT] Custom timeouts: connect={connect_s}s, read={read_s}s")
-        
-        # Log base URL and proxy settings
-        base_url = self.client.base_url
-        http_proxy = os.getenv("HTTP_PROXY", "")
-        https_proxy = os.getenv("HTTPS_PROXY", "")
-        logger.info(f"[OAI_INIT] Base URL: {base_url}, HTTP_PROXY={'set' if http_proxy else 'unset'}, HTTPS_PROXY={'set' if https_proxy else 'unset'}")
-        
-        # Model allowlist
         self.allowlist = OPENAI_ALLOWED_MODELS
-        
-    async def _health_check(self):
-        """One-time health check with 5s timeout."""
-        global _health_check_done, _health_check_success
-        
-        if _health_check_done:
-            return _health_check_success
-        
-        _health_check_done = True
-        
-        try:
-            # Simple health ping - list models with 5s timeout
-            await asyncio.wait_for(
-                self.client.models.list(),
-                timeout=5.0
-            )
-            _health_check_success = True
-            logger.info("[OAI_HEALTH] Health check passed")
-            return True
-        except Exception as e:
-            _health_check_success = False
-            logger.error(f"[OAI_HEALTH] Health check failed: {str(e)[:100]}")
-            return False
+        logger.info(
+            f"[OAI_INIT] Adapter initialized - "
+            f"max_retries={OPENAI_MAX_RETRIES}, timeout={OPENAI_TIMEOUT_SECONDS}s"
+        )
     
-    def _detect_als_position(self, messages: List[Dict]) -> Tuple[bool, str]:
-        """Detect ALS presence and position in messages."""
-        als_indicators = ["de-DE", "Germany", "Deutschland", "Europe/Berlin", "metric units"]
-        
-        for msg in messages:
-            content = str(msg.get("content", ""))
-            if any(indicator in content for indicator in als_indicators):
-                role = msg.get("role", "")
-                return True, role
-        
-        return False, "absent"
-    
-    def _map_grounded_model(self, model: str) -> str:
-        """Map chat models to responses-capable models for grounded runs."""
-        # If it's a chat variant, map to reasoning model for grounded runs
-        if "chat" in model.lower():
-            # Map gpt-5-chat-* to gpt-5-* 
+    def _map_model(self, model: str) -> str:
+        """Map chat variants to base model for Responses API."""
+        if "-chat" in model:
             return model.replace("-chat", "")
         return model
     
-    def _should_use_responses_api(self, model: str, is_grounded: bool) -> bool:
-        """Determine if should use Responses API."""
-        # Always use Responses API for grounded GPT-5 runs
-        if "gpt-5" in model.lower() and is_grounded:
-            return True
-        # Non-grounded GPT-5 can use chat completions
-        return False
-    
-    def _extract_tool_evidence(self, response: Any) -> Tuple[int, List[str]]:
-        """Extract tool call evidence from Responses API output."""
-        tool_count = 0
-        tool_types = []
+    def _build_payload(self, request: LLMRequest, is_grounded: bool) -> Dict:
+        """Build Responses API payload."""
+        # Extract messages
+        system_content = ""
+        user_content = ""
+        for msg in request.messages:
+            if msg["role"] == "system":
+                system_content = msg["content"]
+            elif msg["role"] == "user":
+                user_content = msg["content"]
         
-        if not response:
-            return 0, []
+        # Build typed content blocks
+        input_messages = []
+        if system_content:
+            input_messages.append({
+                "role": "system",
+                "content": [{"type": "input_text", "text": system_content}]
+            })
+        input_messages.append({
+            "role": "user",
+            "content": [{"type": "input_text", "text": user_content}]
+        })
         
-        # Parse Responses API output structure
-        if hasattr(response, 'output'):
-            output = response.output
-            if isinstance(output, list):
-                for item in output:
-                    if hasattr(item, 'type'):
-                        item_type = item.type
-                        if 'web_search' in item_type or 'web_search_call' in item_type:
-                            tool_count += 1
-                            tool_types.append(item_type)
+        # Base payload
+        effective_model = self._map_model(request.model)
+        max_tokens = request.max_tokens or 1024
         
-        return tool_count, tool_types
-    
-    def _build_responses_payload(self, request: LLMRequest, system_content: str, user_content: str, 
-                                  grounding_mode: str, json_schema: Optional[Dict] = None) -> Dict:
-        """Build proper Responses API payload with tools."""
-        # Base payload - NO temperature for Responses API
-        payload = {
-            "model": request.model,
-            "input": [
-                {"role": "system", "content": [{"type": "input_text", "text": system_content}]},
-                {"role": "user", "content": [{"type": "input_text", "text": user_content}]}
-            ],
-            "max_output_tokens": GROUNDED_MAX_TOKENS  # Always 6000 for grounded runs
-        }
-        
-        # Add web search tool
-        payload["tools"] = [{"type": "web_search"}]  # Will fall back to web_search_preview if needed
-        
-        # Set tool_choice based on grounding mode
-        if grounding_mode == "REQUIRED":
-            payload["tool_choice"] = "required"
+        if is_grounded:
+            # Grounded: include tools and use higher token limit
+            max_tokens = GROUNDED_MAX_OUTPUT_TOKENS
+            payload = {
+                "model": effective_model,
+                "input": input_messages,
+                "tools": [{"type": "web_search"}],  # Will negotiate if needed
+                "max_output_tokens": max(max_tokens, MIN_OUTPUT_TOKENS)
+            }
+            
+            # Tool choice for grounding mode
+            grounding_mode = request.meta.get("grounding_mode", "AUTO") if request.meta else "AUTO"
+            if grounding_mode == "REQUIRED":
+                # Note: API may not support non-auto, will handle error
+                payload["tool_choice"] = "required"
+            else:
+                payload["tool_choice"] = "auto"
         else:
-            payload["tool_choice"] = "auto"
+            # Ungrounded: no tools
+            payload = {
+                "model": effective_model,
+                "input": input_messages,
+                "tools": [],
+                "max_output_tokens": max(max_tokens, MIN_OUTPUT_TOKENS),
+                # Hint for better text generation
+                "reasoning": {"effort": "minimal"}
+            }
         
-        # Add strict JSON schema if provided
+        # Add JSON schema if requested
+        json_schema = request.meta.get("json_schema") if request.meta else None
         if json_schema:
             schema = json_schema.get("schema", {})
-            # Ensure additionalProperties is false for strict mode
             if "additionalProperties" not in schema:
                 schema["additionalProperties"] = False
             payload["text"] = {
@@ -243,245 +134,184 @@ class OpenAIAdapter:
                     "strict": True
                 }
             }
+        elif not is_grounded:
+            # Add text format hint for ungrounded
+            payload["text"] = {
+                "format": {"type": "text"}
+            }
         
         return payload
     
-    async def _call_responses_api(self, payload: Dict, timeout: int) -> Any:
-        """Call the actual Responses API endpoint."""
-        # First try with web_search tool
+    async def _call_with_tool_negotiation(self, payload: Dict, timeout: int) -> Tuple[Any, str]:
+        """Call Responses API with tool type negotiation for grounded."""
+        web_tool_type = "web_search"
+        
         try:
+            # Try with web_search first
             response = await self.client.responses.create(**payload, timeout=timeout)
-            return response, "web_search"
+            return response, web_tool_type
         except Exception as e:
             error_str = str(e)
-            # If web_search unsupported, try web_search_preview
-            if "unsupported" in error_str.lower() or "400" in error_str:
-                logger.info("[OAI_RESPONSES] web_search unsupported, falling back to web_search_preview")
+            # If web_search not supported, try fallback
+            if "unsupported" in error_str.lower() or "web_search" in error_str:
+                logger.info("[OAI] web_search unsupported, trying web_search_preview")
                 payload["tools"] = [{"type": "web_search_preview"}]
+                web_tool_type = "web_search_preview"
                 response = await self.client.responses.create(**payload, timeout=timeout)
-                return response, "web_search_preview"
+                return response, web_tool_type
             raise
     
-    async def _call_with_streaming(self, params: Dict) -> Any:
-        """Call with streaming and proper chunk concatenation."""
-        try:
-            # Create streaming response
-            stream = await self.client.chat.completions.create(**params, stream=True)
-            
-            # Concatenate all chunks
-            full_content = []
-            last_chunk = None
-            async for chunk in stream:
-                if chunk.choices and chunk.choices[0].delta.content:
-                    full_content.append(chunk.choices[0].delta.content)
-                last_chunk = chunk
-            
-            # Build final response with concatenated content
-            if last_chunk and full_content:
-                # Create a synthetic response with full content
-                if last_chunk.choices:
-                    last_chunk.choices[0].message.content = ''.join(full_content)
-                return last_chunk
-            
-            raise RuntimeError("No chunks received from streaming")
-            
-        except Exception as e:
-            logger.error(f"[OAI_STREAM] Streaming error: {str(e)[:100]}")
-            raise
+    def _extract_content(self, response: Any) -> Tuple[str, str]:
+        """Extract text content from response.
+        Returns: (content, source)
+        """
+        # Try message items first
+        if hasattr(response, 'output') and isinstance(response.output, list):
+            for item in response.output:
+                if hasattr(item, 'type') and item.type == 'message':
+                    if hasattr(item, 'content') and isinstance(item.content, list):
+                        texts = []
+                        for content_item in item.content:
+                            if hasattr(content_item, 'text'):
+                                texts.append(content_item.text)
+                        if texts:
+                            return ''.join(texts), "message"
+        
+        # Fallback to output_text
+        if hasattr(response, 'output_text') and response.output_text:
+            return response.output_text, "output_text"
+        
+        return "", "none"
+    
+    def _count_tool_calls(self, response: Any) -> Tuple[int, List[str]]:
+        """Count tool calls in response.
+        Returns: (count, tool_types)
+        """
+        count = 0
+        types = []
+        
+        if hasattr(response, 'output') and isinstance(response.output, list):
+            for item in response.output:
+                if hasattr(item, 'type'):
+                    if 'search' in item.type and 'call' in item.type:
+                        count += 1
+                        types.append(item.type)
+        
+        return count, types
     
     async def complete(self, request: LLMRequest, timeout: int = 60) -> LLMResponse:
-        """Complete with proper Responses API for grounded runs."""
-        # Use monotonic clock for accurate timing
+        """Complete request using Responses API only."""
         start_time = time.perf_counter()
-        metadata = {
-            "timestamp": datetime.utcnow().isoformat(),
-            "vendor": "openai",
-            "model": request.model,
-            "original_model": request.model
-        }
-        
-        # Health check first
-        if not await self._health_check():
-            raise RuntimeError("[OAI] API health check failed - aborting to prevent hang")
         
         # Validate model
         ok, msg = validate_model("openai", request.model)
         if not ok:
-            raise ValueError(f"Invalid/unsupported OpenAI model: {msg}")
+            raise ValueError(f"Invalid OpenAI model: {msg}")
         
-        # Check if grounded
+        # Prepare metadata
+        metadata = {
+            "timestamp": datetime.utcnow().isoformat(),
+            "vendor": "openai",
+            "model": request.model,
+            "response_api": "responses_sdk"
+        }
+        
         is_grounded = request.grounded
-        grounding_mode = request.meta.get("grounding_mode", "AUTO") if request.meta else "AUTO"
-        metadata["grounding_mode"] = grounding_mode
+        grounding_mode = request.meta.get("grounding_mode", "AUTO") if request.meta and is_grounded else None
         
-        # Map model for grounded runs
-        effective_model = request.model
-        if is_grounded:
-            effective_model = self._map_grounded_model(request.model)
-            if effective_model != request.model:
-                metadata["effective_model"] = effective_model
-                logger.info(f"[OAI] Mapped {request.model} -> {effective_model} for grounded run")
-        
-        # Determine endpoint
-        use_responses = self._should_use_responses_api(effective_model, is_grounded)
-        endpoint = "responses" if use_responses else "chat.completions"
-        metadata["response_api"] = "responses_http" if use_responses else "chat_completions"
-        
-        # ALS detection
-        als_present, als_position = self._detect_als_position(request.messages)
-        metadata["als_present"] = als_present
-        metadata["als_position"] = als_position
-        
-        # Build messages
-        system_content = ""
-        user_content = ""
-        for msg in request.messages:
-            if msg["role"] == "system":
-                system_content = msg["content"]
-            elif msg["role"] == "user":
-                user_content = msg["content"]
-        
-        # Forward timeout to SDK
-        sdk_timeout = min(timeout, 120)  # Cap at 2 minutes for SDK
-        
-        # Log telemetry line
-        logger.info(
-            f"[OAI_CALL] endpoint={endpoint} model={effective_model} "
-            f"timeout_forwarded={sdk_timeout}s limiter={'bypassed' if DISABLE_LIMITER else 'used'} "
-            f"streaming={'off' if DISABLE_STREAMING or use_responses else 'on'} "
-            f"grounded={is_grounded} mode={grounding_mode} base_url={self.client.base_url}"
-        )
-        
-        # Acquire rate limiter permit with timeout
-        permit = None
         try:
-            permit = await _RL.acquire_with_timeout(timeout_sec=1.0)
+            # Build payload
+            payload = self._build_payload(request, is_grounded)
+            effective_model = payload["model"]
+            if effective_model != request.model:
+                metadata["mapped_model"] = effective_model
             
-            if use_responses and is_grounded:
-                # Build proper Responses API payload
-                json_schema = request.meta.get("json_schema") if request.meta else None
-                payload = self._build_responses_payload(
-                    request, system_content, user_content, 
-                    grounding_mode, json_schema
-                )
-                payload["model"] = effective_model
-                
-                # Call Responses API with tool variant negotiation
-                response, web_tool_type = await self._call_responses_api(payload, sdk_timeout)
+            # Make API call
+            if is_grounded:
+                # Grounded: negotiate tool type
+                response, web_tool_type = await self._call_with_tool_negotiation(payload, timeout)
                 metadata["web_tool_type"] = web_tool_type
                 
                 # Extract tool evidence
-                tool_count, tool_types = self._extract_tool_evidence(response)
+                tool_count, tool_types = self._count_tool_calls(response)
                 metadata["tool_call_count"] = tool_count
-                metadata["grounded_effective"] = tool_count > 0
                 metadata["tool_types"] = tool_types
+                metadata["grounded_evidence_present"] = tool_count > 0
                 
-                # Extract final content from output_text
-                content = ""
-                if hasattr(response, 'output_text'):
-                    content = response.output_text
-                elif hasattr(response, 'output'):
-                    # Look for text in output items
-                    for item in response.output:
-                        if hasattr(item, 'type') and item.type == 'output_text':
-                            content = item.text
-                            break
-                
-                # Validate strict JSON if schema provided
-                if json_schema and content:
-                    try:
-                        parsed = json.loads(content)
-                        metadata["json_valid"] = True
-                    except json.JSONDecodeError as e:
-                        metadata["json_valid"] = False
-                        metadata["json_error"] = str(e)
-                
-                # Set why_not_grounded
-                if not metadata["grounded_effective"]:
-                    if grounding_mode == "AUTO":
-                        metadata["why_not_grounded"] = "auto_mode_no_search"
-                    else:
-                        metadata["why_not_grounded"] = "no_tool_calls"
-                
-                # Enforce REQUIRED mode
+                # REQUIRED mode enforcement
                 if grounding_mode == "REQUIRED" and tool_count == 0:
+                    metadata["fail_closed_reason"] = "no_tool_calls_with_required"
                     raise GroundingRequiredFailedError(
-                        f"REQUIRED grounding mode specified but no tool calls made. "
-                        f"why_not_grounded={metadata['why_not_grounded']}"
+                        f"REQUIRED grounding specified but no tool calls made"
                     )
-                
-                # Extract usage
-                usage = {}
-                if hasattr(response, 'usage'):
-                    usage_obj = response.usage
-                    usage = {
-                        "prompt_tokens": getattr(usage_obj, 'input_tokens', 0),
-                        "completion_tokens": getattr(usage_obj, 'output_tokens', 0),
-                        "reasoning_tokens": getattr(usage_obj, 'reasoning_tokens', 0),
-                        "total_tokens": getattr(usage_obj, 'total_tokens', 0)
-                    }
-                
             else:
-                # Non-grounded or non-GPT-5 path (Chat Completions)
-                params = {
-                    "model": effective_model,
-                    "messages": request.messages,
-                    "timeout": sdk_timeout
-                }
+                # Ungrounded: direct call
+                response = await self.client.responses.create(**payload, timeout=timeout)
+                metadata["tool_call_count"] = 0
+                metadata["grounded_evidence_present"] = False
                 
-                # Use appropriate token parameter
-                if "gpt-5" in effective_model.lower():
-                    max_tokens = request.max_tokens or 1000
-                    if is_grounded:
-                        max_tokens = GROUNDED_MAX_TOKENS
-                    params["max_completion_tokens"] = max_tokens
-                else:
-                    params["max_tokens"] = request.max_tokens or 1000
-                    params["temperature"] = request.temperature or 0.7
-                
-                # Make the API call
-                if DISABLE_STREAMING or "gpt-5" in effective_model.lower():
-                    response = await self.client.chat.completions.create(**params, stream=False)
-                else:
-                    # Streaming with proper chunk concatenation
-                    response = await self._call_with_streaming(params)
-                
-                # Extract content
-                content = ""
-                if hasattr(response, 'choices') and response.choices:
-                    msg = response.choices[0].message
-                    content = msg.content or ""
+                # Check if we need TextEnvelope fallback
+                content, source = self._extract_content(response)
+                if not content:
+                    # Single fallback for GPT-5 empty text quirk
+                    logger.info("[OAI] Empty ungrounded response, trying TextEnvelope fallback")
+                    metadata["fallback_used"] = True
                     
-                    # Check for tool calls in chat completion
-                    if hasattr(msg, 'tool_calls') and msg.tool_calls:
-                        metadata["tool_call_count"] = len(msg.tool_calls)
-                        metadata["grounded_effective"] = True
-                    else:
-                        metadata["tool_call_count"] = 0
-                        metadata["grounded_effective"] = False
-                        if is_grounded:
-                            metadata["why_not_grounded"] = "no_tool_calls"
-                
-                # Extract usage
-                usage = {}
-                if hasattr(response, 'usage'):
-                    usage_obj = response.usage
-                    usage = {
-                        "prompt_tokens": getattr(usage_obj, 'prompt_tokens', 0),
-                        "completion_tokens": getattr(usage_obj, 'completion_tokens', 0),
-                        "total_tokens": getattr(usage_obj, 'total_tokens', 0)
+                    # Wrap with TextEnvelope schema
+                    fallback_payload = payload.copy()
+                    fallback_payload["text"] = {
+                        "format": {
+                            "type": "json_schema",
+                            "name": "TextEnvelope",
+                            "schema": TEXT_ENVELOPE_SCHEMA,
+                            "strict": True
+                        }
                     }
+                    
+                    # Make fallback call
+                    response = await self.client.responses.create(**fallback_payload, timeout=timeout)
+                    
+                    # Extract from JSON envelope
+                    if hasattr(response, 'output_text') and response.output_text:
+                        try:
+                            envelope = json.loads(response.output_text)
+                            content = envelope.get("content", "")
+                            source = "text_envelope"
+                        except json.JSONDecodeError:
+                            content = ""
+                            source = "failed_envelope"
+                else:
+                    metadata["fallback_used"] = False
             
-            # Build response
-            metadata["response_time_ms"] = int((time.perf_counter() - start_time) * 1000)
+            # Extract content for grounded (or use ungrounded result)
+            if is_grounded:
+                content, source = self._extract_content(response)
+                metadata["fallback_used"] = False
+            
+            metadata["text_source"] = source
+            
+            # Extract usage
+            usage = {}
+            if hasattr(response, 'usage'):
+                usage_obj = response.usage
+                usage = {
+                    "prompt_tokens": getattr(usage_obj, 'input_tokens', 0),
+                    "completion_tokens": getattr(usage_obj, 'output_tokens', 0),
+                    "reasoning_tokens": getattr(usage_obj, 'reasoning_tokens', 0),
+                    "total_tokens": getattr(usage_obj, 'total_tokens', 0)
+                }
+            
+            # Calculate latency
+            latency_ms = int((time.perf_counter() - start_time) * 1000)
+            metadata["latency_ms"] = latency_ms
             
             return LLMResponse(
                 content=content,
                 model_version=effective_model,
                 model_fingerprint=None,
-                grounded_effective=metadata.get("grounded_effective", False),
+                grounded_effective=metadata.get("grounded_evidence_present", False),
                 usage=usage,
-                latency_ms=metadata["response_time_ms"],
+                latency_ms=latency_ms,
                 raw_response=None,
                 success=True,
                 vendor="openai",
@@ -492,14 +322,10 @@ class OpenAIAdapter:
             
         except GroundingRequiredFailedError:
             raise
-        except asyncio.TimeoutError:
-            raise
         except Exception as e:
-            logger.error(f"[OAI_ERROR] {str(e)[:200]}")
+            # Let SDK errors bubble up naturally
+            logger.error(f"[OAI] API error: {str(e)[:200]}")
             raise
-        finally:
-            if permit:
-                _RL.release(permit)
     
     def supports_model(self, model: str) -> bool:
         """Check if model is supported."""

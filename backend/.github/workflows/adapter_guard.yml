@@ -1,0 +1,40 @@
+name: Adapter Guard
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'backend/app/llm/adapters/openai_adapter.py'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'backend/app/llm/adapters/openai_adapter.py'
+
+jobs:
+  check-adapter:
+    name: Check OpenAI Adapter
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+    
+    - name: Check for banned patterns
+      run: |
+        cd backend
+        python ci_adapter_guard.py
+    
+    - name: Report success
+      if: success()
+      run: echo "✅ Adapter remains lean and properly uses SDK"
+    
+    - name: Report failure
+      if: failure()
+      run: |
+        echo "❌ Banned patterns detected in adapter!"
+        echo "The adapter must remain lean and delegate to SDK."
+        exit 1
