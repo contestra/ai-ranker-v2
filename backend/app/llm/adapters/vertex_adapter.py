@@ -237,11 +237,32 @@ class VertexAdapter:
         else:
             max_tokens = min(max_tokens, VERTEX_MAX_OUTPUT_TOKENS)
         
+        # Safety settings
+        safety_settings = [
+            SafetySetting(
+                category=HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+                threshold=HarmBlockThreshold.BLOCK_ONLY_HIGH
+            ),
+            SafetySetting(
+                category=HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+                threshold=HarmBlockThreshold.BLOCK_ONLY_HIGH
+            ),
+            SafetySetting(
+                category=HarmCategory.HARM_CATEGORY_HARASSMENT,
+                threshold=HarmBlockThreshold.BLOCK_ONLY_HIGH
+            ),
+            SafetySetting(
+                category=HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+                threshold=HarmBlockThreshold.BLOCK_ONLY_HIGH
+            )
+        ]
+        
         gen_config = GenerateContentConfig(
             maxOutputTokens=max_tokens,
             temperature=request.temperature if hasattr(request, 'temperature') else 0.7,
             topP=request.top_p if hasattr(request, 'top_p') else 0.95,
-            systemInstruction=system_content
+            systemInstruction=system_content,
+            safety_settings=safety_settings
         )
         
         # Add thinking configuration if supported
@@ -264,43 +285,21 @@ class VertexAdapter:
                 gen_config.response_mime_type = "application/json"
                 gen_config.response_schema = json_schema['schema']
         
-        # Safety settings
-        safety_settings = [
-            SafetySetting(
-                category=HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
-                threshold=HarmBlockThreshold.BLOCK_ONLY_HIGH
-            ),
-            SafetySetting(
-                category=HarmCategory.HARM_CATEGORY_HATE_SPEECH,
-                threshold=HarmBlockThreshold.BLOCK_ONLY_HIGH
-            ),
-            SafetySetting(
-                category=HarmCategory.HARM_CATEGORY_HARASSMENT,
-                threshold=HarmBlockThreshold.BLOCK_ONLY_HIGH
-            ),
-            SafetySetting(
-                category=HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
-                threshold=HarmBlockThreshold.BLOCK_ONLY_HIGH
-            )
-        ]
-        
         # Handle grounding
-        tools = []
-        tool_config = None
         grounding_mode = None
         
         if request.grounded:
             grounding_mode = request.meta.get("grounding_mode", "AUTO") if hasattr(request, 'meta') and request.meta else "AUTO"
             metadata["grounding_mode_requested"] = grounding_mode
             
-            # Add GoogleSearch tool
-            tools = [Tool(google_search=GoogleSearch())]
+            # Add GoogleSearch tool to config
+            gen_config.tools = [Tool(google_search=GoogleSearch())]
             metadata["web_tool_type"] = "google_search"
             
             # Configure tool calling based on mode
             if grounding_mode == "REQUIRED":
                 # Force function calling for REQUIRED mode
-                tool_config = ToolConfig(
+                gen_config.tool_config = ToolConfig(
                     function_calling_config=FunctionCallingConfig(
                         mode="ANY",
                         allowed_function_names=["google_search"]
@@ -309,7 +308,7 @@ class VertexAdapter:
                 metadata["grounding_mode_enforced"] = "FFC_ANY"
             else:
                 # AUTO mode - let model decide
-                tool_config = ToolConfig(
+                gen_config.tool_config = ToolConfig(
                     function_calling_config=FunctionCallingConfig(mode="AUTO")
                 )
         
@@ -318,10 +317,7 @@ class VertexAdapter:
             response = await self.client.aio.models.generate_content(
                 model=model_id,
                 contents=user_content,
-                config=gen_config,
-                safety_settings=safety_settings,
-                tools=tools if tools else None,
-                tool_config=tool_config if tool_config else None
+                config=gen_config
             )
             
             # Extract content
