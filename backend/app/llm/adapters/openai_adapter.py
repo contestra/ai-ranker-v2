@@ -115,10 +115,12 @@ class OpenAIAdapter:
                 "model": effective_model,
                 "input": input_messages,
                 "tools": [],
-                "max_output_tokens": max(max_tokens, MIN_OUTPUT_TOKENS),
-                # Hint for better text generation
-                "reasoning": {"effort": "minimal"}
+                "max_output_tokens": max(max_tokens, MIN_OUTPUT_TOKENS)
             }
+            
+            # Add reasoning hint only for GPT-5 models
+            if "gpt-5" in effective_model:
+                payload["reasoning"] = {"effort": "minimal"}
         
         # Add JSON schema if requested
         json_schema = request.meta.get("json_schema") if request.meta else None

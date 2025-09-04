@@ -7,7 +7,9 @@ import hashlib
 import json
 import logging
 import os
-from typing import Optional
+import time
+from datetime import datetime, timedelta
+from typing import Optional, Dict, Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.llm.types import LLMRequest, LLMResponse, ALSContext
@@ -38,6 +40,10 @@ REQUIRED_RELAX_FOR_GOOGLE = os.getenv("REQUIRED_RELAX_FOR_GOOGLE", "false").lowe
 # Enable failover from Gemini Direct to Vertex on 503 errors
 GEMINI_DIRECT_FAILOVER_TO_VERTEX = os.getenv("GEMINI_DIRECT_FAILOVER_TO_VERTEX", "false").lower() in ("true","1","yes","on")
 
+# Circuit breaker configuration
+CB_COOLDOWN_SECONDS = int(os.getenv("CB_COOLDOWN_SECONDS", "60"))
+CB_FAILURE_THRESHOLD = int(os.getenv("CB_FAILURE_THRESHOLD", "3"))
+
 
 
 class UnifiedLLMAdapter:
@@ -49,6 +55,9 @@ class UnifiedLLMAdapter:
     - Common timeout handling
     - Normalize responses
     - Emit telemetry
+    - Capability gating (reasoning/thinking)
+    - Circuit breaker (vendor:model)
+    - Router pacing (Retry-After)
     """
     
     def __init__(self):
@@ -57,6 +66,15 @@ class UnifiedLLMAdapter:
         self._vertex_adapter = None
         self._gemini_adapter = None
         self.als_builder = ALSBuilder()
+        
+        # Circuit breaker state per vendor:model
+        self._circuit_breakers: Dict[str, Dict[str, Any]] = {}
+        
+        # Pacing map for rate-limited requests
+        self._next_allowed_at: Dict[str, float] = {}
+        
+        # Circuit breaker open counter (monotonic)
+        self._cb_open_count = 0
     
     @property
     def openai_adapter(self):
@@ -80,6 +98,199 @@ class UnifiedLLMAdapter:
             from app.llm.adapters.gemini_adapter import GeminiAdapter
             self._gemini_adapter = GeminiAdapter()
         return self._gemini_adapter
+    
+    def _capabilities_for(self, vendor: str, model: str) -> Dict[str, Any]:
+        """
+        Determine capabilities for a given vendor:model pair.
+        
+        Returns:
+            Dict with capability flags:
+            - supports_reasoning_effort: OpenAI reasoning models only
+            - supports_reasoning_summary: OpenAI reasoning models only
+            - supports_thinking_budget: Gemini/Vertex thinking models
+            - include_thoughts_allowed: Gemini/Vertex thinking models
+        """
+        caps = {
+            "supports_reasoning_effort": False,
+            "supports_reasoning_summary": False,
+            "supports_thinking_budget": False,
+            "include_thoughts_allowed": False
+        }
+        
+        if vendor == "openai":
+            # OpenAI reasoning models: GPT-5 family and o-series
+            if (model.startswith("gpt-5") or 
+                model.startswith("o3") or 
+                model.startswith("o4-mini") or
+                model.startswith("o1")):
+                caps["supports_reasoning_effort"] = True
+                caps["supports_reasoning_summary"] = True
+            # gpt-4o* models do NOT support reasoning parameters
+            
+        elif vendor in ("gemini_direct", "vertex"):
+            # Gemini 2.5 thinking-capable models
+            bare_model = self._bare_gemini_model(model)
+            if "2.5" in bare_model or "2-5" in bare_model:
+                if "flash" in bare_model.lower() or "pro" in bare_model.lower():
+                    caps["supports_thinking_budget"] = True
+                    caps["include_thoughts_allowed"] = True
+                    
+                    # Note: Gemini 2.5 Pro cannot fully disable thinking
+                    if "pro" in bare_model.lower():
+                        caps["thinking_always_on"] = True
+        
+        return caps
+    
+    def _bare_gemini_model(self, model: str) -> str:
+        """Extract bare model name from Gemini model path."""
+        if model.startswith("publishers/google/models/"):
+            model = model.split("publishers/google/models/", 1)[1]
+        if model.startswith("models/"):
+            model = model.split("models/", 1)[1]
+        return model
+    
+    def _check_circuit_breaker(self, vendor: str, model: str) -> tuple[str, Optional[str]]:
+        """
+        Check circuit breaker status for vendor:model.
+        
+        Returns:
+            (status, error_message): status is "closed", "open", or "half-open"
+                                    error_message is set if breaker is open
+        """
+        cb_key = f"{vendor}:{model}"
+        
+        if cb_key not in self._circuit_breakers:
+            return "closed", None
+        
+        breaker = self._circuit_breakers[cb_key]
+        now = time.time()
+        
+        if breaker["state"] == "open":
+            if now >= breaker["open_until"]:
+                # Transition to half-open
+                breaker["state"] = "half-open"
+                logger.info(f"[CB] Circuit breaker {cb_key} transitioning to half-open")
+                return "half-open", None
+            else:
+                remaining = int(breaker["open_until"] - now)
+                return "open", f"Circuit breaker open for {cb_key}, retry in {remaining}s"
+        
+        return breaker["state"], None
+    
+    def _record_success(self, vendor: str, model: str):
+        """Record successful call for circuit breaker."""
+        cb_key = f"{vendor}:{model}"
+        
+        if cb_key in self._circuit_breakers:
+            breaker = self._circuit_breakers[cb_key]
+            if breaker["state"] in ("half-open", "open"):
+                logger.info(f"[CB] Circuit breaker {cb_key} closing after success")
+                breaker["state"] = "closed"
+                breaker["consecutive_failures"] = 0
+                breaker["last_error"] = None
+    
+    def _record_failure(self, vendor: str, model: str, error: Exception):
+        """Record failure for circuit breaker."""
+        cb_key = f"{vendor}:{model}"
+        
+        # Determine if this is a transient error that should trigger circuit breaker
+        is_transient = self._is_transient_error(vendor, error)
+        
+        if not is_transient:
+            return  # Non-transient errors don't affect circuit breaker
+        
+        if cb_key not in self._circuit_breakers:
+            self._circuit_breakers[cb_key] = {
+                "state": "closed",
+                "consecutive_failures": 0,
+                "open_until": 0,
+                "last_error": None
+            }
+        
+        breaker = self._circuit_breakers[cb_key]
+        breaker["consecutive_failures"] += 1
+        breaker["last_error"] = str(error)[:200]
+        
+        if breaker["consecutive_failures"] >= CB_FAILURE_THRESHOLD:
+            # Open the breaker
+            breaker["state"] = "open"
+            breaker["open_until"] = time.time() + CB_COOLDOWN_SECONDS
+            self._cb_open_count += 1
+            logger.warning(f"[CB] Circuit breaker opened for {cb_key} after {CB_FAILURE_THRESHOLD} failures")
+    
+    def _is_transient_error(self, vendor: str, error: Exception) -> bool:
+        """Determine if error is transient and should trigger circuit breaker."""
+        error_str = str(error)
+        error_type = type(error).__name__
+        
+        if vendor == "openai":
+            # OpenAI transient errors
+            if "RateLimitError" in error_type or "429" in error_str:
+                return True
+            if any(code in error_str for code in ["500", "502", "503", "504"]):
+                return True
+        
+        elif vendor in ("vertex", "gemini_direct"):
+            # Google transient errors
+            if any(marker in error_str for marker in [
+                "ServiceUnavailable", "TooManyRequests", "ResourceExhausted",
+                "503", "429", "500", "502"
+            ]):
+                return True
+        
+        return False
+    
+    def _extract_retry_after(self, vendor: str, error: Exception) -> Optional[int]:
+        """Extract Retry-After hint from error if available."""
+        # Check if error has response attribute with headers
+        if hasattr(error, 'response'):
+            response = error.response
+            if hasattr(response, 'headers'):
+                headers = response.headers
+                
+                # Standard Retry-After header
+                if 'Retry-After' in headers:
+                    try:
+                        return int(headers['Retry-After'])
+                    except (ValueError, TypeError):
+                        pass
+                
+                # OpenAI specific headers
+                if vendor == "openai":
+                    for header in ['x-ratelimit-reset-requests', 'x-ratelimit-reset-tokens']:
+                        if header in headers:
+                            try:
+                                reset_time = int(headers[header])
+                                # If it's a timestamp, calculate seconds from now
+                                if reset_time > time.time():
+                                    return int(reset_time - time.time())
+                            except (ValueError, TypeError):
+                                pass
+        
+        return None
+    
+    def _check_pacing(self, vendor: str, model: str) -> Optional[str]:
+        """Check if request should be paced based on previous rate limits."""
+        pace_key = f"{vendor}:{model}"
+        
+        if pace_key in self._next_allowed_at:
+            next_allowed = self._next_allowed_at[pace_key]
+            now = time.time()
+            
+            if now < next_allowed:
+                wait_time = int(next_allowed - now)
+                return f"Router pacing: wait {wait_time}s before next request to {pace_key}"
+        
+        return None
+    
+    def _update_pacing(self, vendor: str, model: str, error: Exception):
+        """Update pacing based on rate limit errors."""
+        retry_after = self._extract_retry_after(vendor, error)
+        
+        if retry_after and retry_after > 0:
+            pace_key = f"{vendor}:{model}"
+            self._next_allowed_at[pace_key] = time.time() + retry_after
+            logger.info(f"[PACING] Set next allowed time for {pace_key}: +{retry_after}s")
     async def complete(
         self,
         request: LLMRequest,
@@ -165,6 +376,45 @@ class UnifiedLLMAdapter:
         # Step 3: Validate vendor
         if request.vendor not in ("openai", "vertex", "gemini_direct"):
             raise ValueError(f"Unsupported vendor: {request.vendor}")
+        
+        # Step 3.1: Initialize variables needed throughout the function
+        reasoning_hint_dropped = False
+        thinking_hint_dropped = False
+        cb_status = "closed"
+        
+        # Step 3.2: Compute capabilities and gate unsupported parameters
+        caps = self._capabilities_for(request.vendor, request.model)
+        
+        # Store capabilities in metadata for adapter to use
+        if not hasattr(request, 'metadata'):
+            request.metadata = {}
+        request.metadata["capabilities"] = caps
+        
+        # Gate reasoning parameters for OpenAI
+        if request.vendor == "openai":
+            if hasattr(request, 'meta') and request.meta:
+                if 'reasoning_effort' in request.meta or 'reasoning_summary' in request.meta:
+                    if not caps["supports_reasoning_effort"]:
+                        # Drop reasoning parameters for non-reasoning models
+                        if 'reasoning_effort' in request.meta:
+                            del request.meta['reasoning_effort']
+                        if 'reasoning_summary' in request.meta:
+                            del request.meta['reasoning_summary']
+                        reasoning_hint_dropped = True
+                        logger.info(f"[CAPABILITY_GATE] Dropped reasoning params for {request.model}")
+        
+        # Gate thinking parameters for Gemini/Vertex
+        if request.vendor in ("gemini_direct", "vertex"):
+            if hasattr(request, 'meta') and request.meta:
+                if 'thinking_budget' in request.meta or 'include_thoughts' in request.meta:
+                    if not caps["supports_thinking_budget"]:
+                        # Drop thinking parameters for non-thinking models
+                        if 'thinking_budget' in request.meta:
+                            del request.meta['thinking_budget']
+                        if 'include_thoughts' in request.meta:
+                            del request.meta['include_thoughts']
+                        thinking_hint_dropped = True
+                        logger.info(f"[CAPABILITY_GATE] Dropped thinking params for {request.model}")
         
         # Step 3.5: Normalize vantage_policy - remove all proxy modes
         original_policy = str(getattr(request, 'vantage_policy', 'ALS_ONLY'))
@@ -318,6 +568,15 @@ class UnifiedLLMAdapter:
                            f"model={request.model}, tool_calls={tool_count}")
             else:
                 logger.debug(f"[GROUNDING_UNUSED] Request was grounded but no tools were invoked")
+        
+        # Add router-level metadata to response
+        if not hasattr(response, 'metadata'):
+            response.metadata = {}
+        
+        # Add capability gating telemetry
+        response.metadata['reasoning_hint_dropped'] = reasoning_hint_dropped
+        response.metadata['thinking_hint_dropped'] = thinking_hint_dropped
+        response.metadata['circuit_breaker_status'] = cb_status
         
         # Post-validation for REQUIRED mode - enforce grounding requirement
         # This provides uniform enforcement across all providers, especially those that can't force tools
@@ -595,6 +854,19 @@ class UnifiedLLMAdapter:
                 'response_api': response.metadata.get('response_api') if hasattr(response, 'metadata') else None,
                 'provider_api_version': response.metadata.get('provider_api_version') if hasattr(response, 'metadata') else None,
                 'region': response.metadata.get('region') if hasattr(response, 'metadata') else None,
+                
+                # Reasoning/Thinking parameters
+                'reasoning_effort': request.meta.get('reasoning_effort') if hasattr(request, 'meta') and request.meta else None,
+                'reasoning_summary_requested': request.meta.get('reasoning_summary', False) if hasattr(request, 'meta') and request.meta else False,
+                'thinking_budget': request.meta.get('thinking_budget') if hasattr(request, 'meta') and request.meta else None,
+                'include_thoughts': request.meta.get('include_thoughts', False) if hasattr(request, 'meta') and request.meta else False,
+                'reasoning_hint_dropped': response.metadata.get('reasoning_hint_dropped', False) if hasattr(response, 'metadata') else False,
+                'thinking_hint_dropped': response.metadata.get('thinking_hint_dropped', False) if hasattr(response, 'metadata') else False,
+                
+                # Circuit breaker and pacing
+                'circuit_breaker_status': response.metadata.get('circuit_breaker_status', 'closed') if hasattr(response, 'metadata') else 'closed',
+                'circuit_breaker_open_count': self._cb_open_count,
+                'router_pacing_delay': response.metadata.get('router_pacing_delay', False) if hasattr(response, 'metadata') else False,
                 
                 
         # Direct Gemini allowlist (router is SSoT)

@@ -136,6 +136,12 @@ For issues or questions:
 3. Run `pytest tests/test_grounding_gates.py -v` to verify compliance
 
 ## Version History
+- **2025-09-04**: Major refactoring and router upgrade
+  - OpenAI adapter reduced by 55% (removed SDK duplicates)
+  - Added capability gating (prevents 400 errors)
+  - Implemented circuit breaker and pacing
+  - Fixed GPT-5 empty response issues
+  - Enhanced telemetry with new fields
 - **2025-08-31**: Full PRD compliance achieved
   - Fixed ALS propagation bugs
   - Added authority scoring system
