@@ -118,9 +118,12 @@ class OpenAIAdapter:
                 "max_output_tokens": max(max_tokens, MIN_OUTPUT_TOKENS)
             }
             
-            # Add reasoning hint only for GPT-5 models
-            if "gpt-5" in effective_model:
-                payload["reasoning"] = {"effort": "minimal"}
+            # Honor router capabilities for reasoning hints
+            caps = request.metadata.get("capabilities", {}) if hasattr(request, 'metadata') and request.metadata else {}
+            if caps.get("supports_reasoning_effort", False):
+                # Router says this model supports reasoning hints
+                reasoning_effort = request.meta.get("reasoning_effort", "minimal") if request.meta else "minimal"
+                payload["reasoning"] = {"effort": reasoning_effort}
         
         # Add JSON schema if requested
         json_schema = request.meta.get("json_schema") if request.meta else None
