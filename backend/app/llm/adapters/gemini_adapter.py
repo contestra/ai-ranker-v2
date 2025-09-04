@@ -303,39 +303,71 @@ class GeminiAdapter:
             if include_thoughts:
                 metadata["include_thoughts_requested"] = True
         
-        # Handle JSON schema if requested
+        # Determine if we need JSON output and how to achieve it
+        json_schema_requested = False
+        json_schema = None
         if hasattr(request, 'meta') and request.meta and request.meta.get('json_schema'):
             json_schema = request.meta['json_schema']
             if 'schema' in json_schema:
-                gen_config.response_mime_type = "application/json"
-                gen_config.response_schema = json_schema['schema']
+                json_schema_requested = True
         
-        # Handle grounding
+        # Handle grounding and JSON mode based on combination
         grounding_mode = None
         
         if request.grounded:
             grounding_mode = request.meta.get("grounding_mode", "AUTO") if hasattr(request, 'meta') and request.meta else "AUTO"
             metadata["grounding_mode_requested"] = grounding_mode
             
-            # Add GoogleSearch tool to config
-            gen_config.tools = [Tool(google_search=GoogleSearch())]
-            metadata["web_tool_type"] = "google_search"
-            
-            # Configure tool calling based on mode
-            if grounding_mode == "REQUIRED":
-                # Force function calling for REQUIRED mode
+            if json_schema_requested:
+                # Grounded + JSON: Use FFC (schema-as-tool) with GoogleSearch
+                # Create function declaration for the JSON schema
+                emit_result_func = FunctionDeclaration(
+                    name="emit_result",
+                    description="Emit the structured result in the requested format",
+                    parameters=json_schema['schema']
+                )
+                
+                # Add both GoogleSearch and emit_result tools
+                gen_config.tools = [
+                    Tool(google_search=GoogleSearch()),
+                    Tool(function_declarations=[emit_result_func])
+                ]
+                metadata["web_tool_type"] = "google_search"
+                metadata["schema_tool_present"] = True
+                
+                # Force the model to call emit_result
                 gen_config.tool_config = ToolConfig(
                     function_calling_config=FunctionCallingConfig(
                         mode="ANY",
-                        allowed_function_names=["google_search"]
+                        allowed_function_names=["emit_result"]
                     )
                 )
-                metadata["grounding_mode_enforced"] = "FFC_ANY"
+                metadata["grounding_mode_enforced"] = "FFC_ANY_with_schema"
             else:
-                # AUTO mode - let model decide
-                gen_config.tool_config = ToolConfig(
-                    function_calling_config=FunctionCallingConfig(mode="AUTO")
-                )
+                # Grounded without JSON: Regular grounding tools
+                gen_config.tools = [Tool(google_search=GoogleSearch())]
+                metadata["web_tool_type"] = "google_search"
+                
+                # Configure tool calling based on mode
+                if grounding_mode == "REQUIRED":
+                    # Force function calling for REQUIRED mode
+                    gen_config.tool_config = ToolConfig(
+                        function_calling_config=FunctionCallingConfig(
+                            mode="ANY",
+                            allowed_function_names=["google_search"]
+                        )
+                    )
+                    metadata["grounding_mode_enforced"] = "FFC_ANY"
+                else:
+                    # AUTO mode - let model decide
+                    gen_config.tool_config = ToolConfig(
+                        function_calling_config=FunctionCallingConfig(mode="AUTO")
+                    )
+        elif json_schema_requested:
+            # Ungrounded + JSON: Use JSON Mode
+            gen_config.response_mime_type = "application/json"
+            gen_config.response_schema = json_schema['schema']
+            metadata["json_mode_active"] = True
         
         # Make single SDK call
         try:
@@ -345,8 +377,17 @@ class GeminiAdapter:
                 config=gen_config
             )
             
-            # Extract content
-            content = _extract_text_from_response(response)
+            # Extract content - check for emit_result function call first
+            func_name, func_args = _extract_function_call(response)
+            
+            if func_name == "emit_result" and func_args:
+                # Grounded + JSON case: extract structured data from function args
+                content = json.dumps(func_args) if isinstance(func_args, dict) else str(func_args)
+                metadata["schema_tool_invoked"] = True
+            else:
+                # Regular text extraction
+                content = _extract_text_from_response(response)
+                metadata["schema_tool_invoked"] = False
             
             # Extract citations if grounded
             citations = []
@@ -356,8 +397,7 @@ class GeminiAdapter:
             if request.grounded:
                 citations = _extract_citations_from_grounding(response)
                 
-                # Count tool calls (GoogleSearch invocations)
-                func_name, func_args = _extract_function_call(response)
+                # Check for GoogleSearch invocation
                 if func_name == "google_search":
                     tool_call_count = 1
                     grounded_effective = True

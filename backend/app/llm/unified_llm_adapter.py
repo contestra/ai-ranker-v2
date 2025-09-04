@@ -3,6 +3,7 @@ Unified LLM adapter router for AI Ranker V2
 Routes requests to appropriate provider and handles ALS, telemetry
 """
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -43,6 +44,9 @@ GEMINI_DIRECT_FAILOVER_TO_VERTEX = os.getenv("GEMINI_DIRECT_FAILOVER_TO_VERTEX",
 # Circuit breaker configuration
 CB_COOLDOWN_SECONDS = int(os.getenv("CB_COOLDOWN_SECONDS", "60"))
 CB_FAILURE_THRESHOLD = int(os.getenv("CB_FAILURE_THRESHOLD", "3"))
+
+# ALS configuration
+ALS_HMAC_SECRET = os.getenv("ALS_HMAC_SECRET", "als_secret_key").encode('utf-8')
 
 
 
@@ -90,6 +94,7 @@ class UnifiedLLMAdapter:
         if self._vertex_adapter is None:
             from app.llm.adapters.vertex_adapter import VertexAdapter
             self._vertex_adapter = VertexAdapter()
+        return self._vertex_adapter
 
     @property
     def gemini_adapter(self):
@@ -416,7 +421,35 @@ class UnifiedLLMAdapter:
                         thinking_hint_dropped = True
                         logger.info(f"[CAPABILITY_GATE] Dropped thinking params for {request.model}")
         
-        # Step 3.5: Normalize vantage_policy - remove all proxy modes
+        # Step 3.5: Check circuit breaker and pacing
+        vendor = request.vendor
+        model = request.model
+        
+        # Check circuit breaker
+        cb_status, cb_message = self._check_circuit_breaker(vendor, model)
+        if cb_status == "open":
+            # Circuit breaker is open, fail fast
+            response = LLMResponse(
+                content="",
+                success=False,
+                vendor=vendor,
+                model=model,
+                error_type="CIRCUIT_BREAKER_OPEN",
+                error_message=cb_message or f"Circuit breaker open for {vendor}:{model}",
+                metadata={"circuit_breaker_status": "open"}
+            )
+            return response
+        
+        # Check pacing
+        pacing_delay = self._check_pacing(vendor, model)
+        if pacing_delay > 0:
+            # Apply pacing delay
+            await asyncio.sleep(pacing_delay)
+            if not hasattr(request, 'metadata'):
+                request.metadata = {}
+            request.metadata["router_pacing_delay"] = int(pacing_delay * 1000)  # ms
+        
+        # Step 3.6: Normalize vantage_policy - remove all proxy modes
         original_policy = str(getattr(request, 'vantage_policy', 'ALS_ONLY'))
         normalized_policy = original_policy
         proxies_normalized = False
@@ -457,6 +490,7 @@ class UnifiedLLMAdapter:
         try:
             if request.vendor == "openai":
                 response = await self.openai_adapter.complete(request, timeout=timeout)
+                self._record_success(request.vendor, request.model)
             elif (
                 request.vendor == "gemini_direct"
                 or (
@@ -467,7 +501,12 @@ class UnifiedLLMAdapter:
             ):
                 try:
                     response = await self.gemini_adapter.complete(request, timeout=timeout)
+                    self._record_success("gemini_direct", request.model)
                 except Exception as e:
+                    # Record failure and update pacing
+                    self._record_failure("gemini_direct", request.model, e)
+                    self._update_pacing("gemini_direct", request.model, e)
+                    
                     error_str = str(e)
                     # Check if it's a circuit breaker open error and failover is enabled
                     if (
@@ -494,6 +533,7 @@ class UnifiedLLMAdapter:
                             vertex_req.model = f"publishers/google/models/{bare_model}"
                         
                         response = await self.vertex_adapter.complete(vertex_req, timeout=timeout)
+                        self._record_success("vertex", vertex_req.model)
                         
                         # Add failover metadata
                         if not hasattr(response, "metadata"):
@@ -507,8 +547,14 @@ class UnifiedLLMAdapter:
                         raise
             else:  # vertex - NO SILENT FALLBACKS, auth errors should surface
                 response = await self.vertex_adapter.complete(request, timeout=timeout)
+                self._record_success(request.vendor, request.model)
                 
         except Exception as e:
+            # Record failure and update pacing if we haven't already
+            if not failover_applied:
+                self._record_failure(request.vendor, request.model, e)
+                self._update_pacing(request.vendor, request.model, e)
+            
             # Convert adapter exceptions to LLM response format
             error_msg = str(e)
             logger.error(f"Adapter failed for vendor={request.vendor}: {error_msg}")
@@ -611,11 +657,11 @@ class UnifiedLLMAdapter:
                     failure_reason = "Model did not invoke grounding tools"
             
             # Check for ANCHORED citations (unlinked-only is insufficient for REQUIRED)
-            elif hasattr(response, 'metadata') and response.metadata:
-                citations = response.metadata.get('citations', [])
+            elif hasattr(response, 'citations'):
+                citations = response.citations if response.citations else []
                 
                 # Check if we have the anchored count directly in metadata
-                anchored_count = response.metadata.get('anchored_citations_count', None)
+                anchored_count = response.metadata.get('anchored_citations_count', None) if hasattr(response, 'metadata') and response.metadata else None
                 
                 if anchored_count is None and citations:
                     # Compute anchored count from citations list
@@ -720,7 +766,7 @@ class UnifiedLLMAdapter:
         
         # Generate deterministic seed using HMAC
         seed_data = f"{seed_key_id}:{template_id}:{country_code}".encode('utf-8')
-        hmac_hash = hmac.new(b'als_secret_key', seed_data, hashlib.sha256).hexdigest()
+        hmac_hash = hmac.new(ALS_HMAC_SECRET, seed_data, hashlib.sha256).hexdigest()
         
         # Convert hash to deterministic index
         # Get number of available variants from ALS builder
