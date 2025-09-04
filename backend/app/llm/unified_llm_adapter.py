@@ -656,33 +656,34 @@ class UnifiedLLMAdapter:
                     grounding_failed = True
                     failure_reason = "Model did not invoke grounding tools"
             
-            # Check for ANCHORED citations (unlinked-only is insufficient for REQUIRED)
+            # Check for ANCHORED citations (unlinked-only is insufficient for REQUIRED by default)
             elif hasattr(response, 'citations'):
                 citations = response.citations if response.citations else []
                 
-                # Check if we have the anchored count directly in metadata
-                anchored_count = response.metadata.get('anchored_citations_count', None) if hasattr(response, 'metadata') and response.metadata else None
+                # Get the explicit counts from metadata
+                metadata = response.metadata if hasattr(response, 'metadata') and response.metadata else {}
+                anchored_count = metadata.get('anchored_citations_count', 0)
+                unlinked_count = metadata.get('unlinked_sources_count', 0)
                 
-                if anchored_count is None and citations:
-                    # Compute anchored count from citations list
-                    # OpenAI: 'annotation' means anchored to text
-                    # Vertex: 'direct_uri', 'v1_join', 'groundingChunks' are anchored
-                    if request.vendor == 'openai':
-                        anchored_types = {'annotation', 'url_citation'}  # url_citation for backward compat
+                # Default policy: require anchored > 0 for REQUIRED mode
+                if anchored_count == 0:
+                    # Check if we should relax for Google vendors with unlinked evidence
+                    is_google_vendor = request.vendor in ("vertex", "gemini_direct")
+                    if is_google_vendor and REQUIRED_RELAX_FOR_GOOGLE and unlinked_count > 0:
+                        # Allow unlinked-only pass for Google vendors when flag is on
+                        grounding_failed = False
+                        if response.metadata is None:
+                            response.metadata = {}
+                        response.metadata["required_pass_reason"] = "unlinked_google"
                     else:
-                        # Vertex: only JOIN-anchored or direct citations count as anchored
-                        # groundingChunks are unlinked evidence, not text-anchored
-                        anchored_types = {'direct_uri', 'v1_join'}
-                    
-                    anchored_count = sum(1 for c in citations 
-                                       if c.get('source_type') in anchored_types)
-                
-                if not citations or (anchored_count is not None and anchored_count == 0):
-                    grounding_failed = True
-                    if not citations:
-                        failure_reason = "Grounding tools invoked but no citations extracted"
-                    else:
-                        failure_reason = f"Grounding tools invoked but only unlinked sources found (need anchored citations for REQUIRED mode)"
+                        grounding_failed = True
+                        if not citations:
+                            failure_reason = "Grounding tools invoked but no citations extracted"
+                        else:
+                            failure_reason = f"REQUIRED mode requires anchored citations (found {unlinked_count} unlinked only)"
+                else:
+                    # We have anchored citations - pass
+                    grounding_failed = False
             else:
                 # No metadata at all
                 grounding_failed = True

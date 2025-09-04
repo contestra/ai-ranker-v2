@@ -107,19 +107,23 @@ def _extract_function_call(response) -> Tuple[Optional[str], Optional[Dict]]:
     return None, None
 
 
-def _extract_citations_from_grounding(response) -> List[Dict[str, Any]]:
-    """Extract citations from grounding metadata."""
+def _extract_citations_from_grounding(response) -> Tuple[List[Dict[str, Any]], int, int]:
+    """Extract citations from grounding metadata.
+    Returns: (citations list, anchored_count, unlinked_count)
+    """
     citations = []
+    anchored_count = 0
+    unlinked_count = 0
     
     if not response or not getattr(response, "candidates", None):
-        return citations
+        return citations, anchored_count, unlinked_count
     
     for cand in response.candidates or []:
         grounding_metadata = getattr(cand, "grounding_metadata", None)
         if not grounding_metadata:
             continue
             
-        # Extract grounding_chunks (web search results)
+        # Extract grounding_chunks (web search results) - these are unlinked
         grounding_chunks = getattr(grounding_metadata, "grounding_chunks", [])
         for chunk in grounding_chunks:
             web = getattr(chunk, "web", None)
@@ -134,16 +138,18 @@ def _extract_citations_from_grounding(response) -> List[Dict[str, Any]]:
                         "source_type": "grounding_chunk",
                         "domain": _get_registrable_domain(final_url)
                     })
+                    unlinked_count += 1  # Grounding chunks are unlinked evidence
         
-        # Extract search_queries (what was searched)
+        # Extract search_queries (what was searched) - these are also unlinked
         search_queries = getattr(grounding_metadata, "search_queries", [])
         for query in search_queries:
             citations.append({
                 "query": query,
                 "source_type": "search_query"
             })
+            # Don't count queries toward unlinked_count as they're not sources
     
-    return citations
+    return citations, anchored_count, unlinked_count
 
 
 def _build_two_messages(messages: List[Dict[str, str]], als_context: Dict = None) -> Tuple[str, str]:
@@ -370,7 +376,9 @@ class VertexAdapter:
             grounded_effective = False
             
             if request.grounded:
-                citations = _extract_citations_from_grounding(response)
+                citations, anchored_count, unlinked_count = _extract_citations_from_grounding(response)
+                metadata["anchored_citations_count"] = anchored_count
+                metadata["unlinked_sources_count"] = unlinked_count
                 
                 # Check for GoogleSearch invocation
                 if func_name == "google_search":
@@ -397,6 +405,10 @@ class VertexAdapter:
                         f"REQUIRED grounding specified but no grounding evidence found. "
                         f"Tool calls: {tool_call_count}"
                     )
+            else:
+                # Not grounded - set citation counts to 0
+                metadata["anchored_citations_count"] = 0
+                metadata["unlinked_sources_count"] = 0
             
             # Extract usage
             usage = {}

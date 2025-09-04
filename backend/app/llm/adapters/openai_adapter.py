@@ -200,11 +200,13 @@ class OpenAIAdapter:
         
         return count, types
     
-    def _extract_citations(self, response: Any) -> List[Dict[str, Any]]:
+    def _extract_citations(self, response: Any) -> Tuple[List[Dict[str, Any]], int, int]:
         """Extract citations from web_search_call items in response.
-        Returns: List of citation dicts with url, title, domain
+        Returns: (citations list, anchored_count, unlinked_count)
         """
         citations = []
+        anchored_count = 0
+        unlinked_count = 0
         seen_urls = set()
         
         if hasattr(response, 'output') and isinstance(response.output, list):
@@ -226,14 +228,24 @@ class OpenAIAdapter:
                                 except:
                                     domain = 'unknown'
                                 
+                                # Check if this is anchored (has annotation) or unlinked
+                                # OpenAI: url_citation or annotation types are anchored
+                                has_annotation = getattr(result, 'annotation', None) is not None
+                                source_type = 'annotation' if has_annotation else 'web_search'
+                                
+                                if has_annotation:
+                                    anchored_count += 1
+                                else:
+                                    unlinked_count += 1
+                                
                                 citations.append({
                                     'url': url,
                                     'title': getattr(result, 'title', ''),
                                     'domain': domain,
-                                    'source_type': 'web_search'
+                                    'source_type': source_type
                                 })
         
-        return citations
+        return citations, anchored_count, unlinked_count
     
     async def complete(self, request: LLMRequest, timeout: int = 60) -> LLMResponse:
         """Complete request using Responses API only."""
@@ -321,12 +333,20 @@ class OpenAIAdapter:
             
             # Extract content for grounded (or use ungrounded result)
             citations = []
+            anchored_count = 0
+            unlinked_count = 0
             if is_grounded:
                 content, source = self._extract_content(response)
                 metadata["fallback_used"] = False
                 # Extract citations from web search results
-                citations = self._extract_citations(response)
+                citations, anchored_count, unlinked_count = self._extract_citations(response)
                 metadata["citation_count"] = len(citations)
+                metadata["anchored_citations_count"] = anchored_count
+                metadata["unlinked_sources_count"] = unlinked_count
+            else:
+                # Ungrounded - always set counts to 0
+                metadata["anchored_citations_count"] = 0
+                metadata["unlinked_sources_count"] = 0
             
             metadata["text_source"] = source
             

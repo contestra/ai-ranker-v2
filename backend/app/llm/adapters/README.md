@@ -96,6 +96,51 @@ Direct Gemini API integration.
 - `GEMINI_MAX_OUTPUT_TOKENS`: Max output tokens (default: 8192)
 - `GEMINI_GROUNDED_MAX_TOKENS`: Max tokens for grounded requests (default: 6000)
 
+## Citation Semantics
+
+All adapters provide consistent citation tracking with explicit counts:
+
+### Citation Types
+- **Anchored Citations**: Citations tied to specific text spans/annotations in the response
+  - OpenAI: Items with `annotation` field present
+  - Google (Gemini/Vertex): Currently always 0 (no text anchoring exposed)
+  
+- **Unlinked Sources**: Evidence items not anchored to text
+  - OpenAI: Web search results without annotations  
+  - Google: Grounding chunks from web searches
+
+### Metadata Fields
+Every grounded response includes in `metadata`:
+- `anchored_citations_count`: Number of text-anchored citations (default: 0)
+- `unlinked_sources_count`: Number of unlinked evidence items (default: 0)
+- `citation_count`: Total citations in the list
+
+### REQUIRED Mode Enforcement
+Default policy for `grounding_mode: "REQUIRED"`:
+- **Requires anchored_citations_count > 0** to pass
+- Fails closed if only unlinked sources are found
+- Exception: When `REQUIRED_RELAX_FOR_GOOGLE=true`, Google vendors (Gemini/Vertex) can pass with unlinked_sources_count > 0
+  - Sets `required_pass_reason: "unlinked_google"` in metadata for tracking
+
+### Response Structure
+```python
+response.citations = [
+    {
+        "url": "https://example.com",
+        "title": "Example Page", 
+        "domain": "example.com",
+        "source_type": "annotation" | "web_search" | "grounding_chunk"
+    },
+    # ...
+]
+response.metadata = {
+    "anchored_citations_count": 2,
+    "unlinked_sources_count": 3,
+    "citation_count": 5,
+    "required_pass_reason": "unlinked_google"  # Only when relaxation applied
+}
+```
+
 ## CI Protection
 The `ci_adapter_guard.py` script runs in CI to prevent reintroduction of banned patterns:
 - Custom HTTP clients
