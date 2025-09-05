@@ -80,5 +80,63 @@ curl -s http://localhost:8000/health/proxy | jq '.mode_guess'
 - WIF for production, ADC for development
 - All secrets in `.env` (gitignored)
 
+## 🔧 OpenAI Grounding Configuration
+
+### Overview
+OpenAI grounded mode uses the Responses API with `web_search` tools. Due to API limitations where the model sometimes returns web search results without synthesizing a final answer, the adapter implements a deterministic fallback chain.
+
+### Fallback Chain
+1. **Initial Request**: Grounded call with `web_search` tools
+2. **Provoker Retry**: If empty response but tool calls present, adds synthesis prompt
+3. **Two-Step Fallback**: If still empty, runs synthesis without tools using evidence list
+
+### Feature Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `OPENAI_PROVOKER_ENABLED` | `true` | Enable provoker retry for empty responses |
+| `OPENAI_GROUNDED_TWO_STEP` | `false` | Enable two-step synthesis fallback (recommend `true` in production) |
+| `OPENAI_GROUNDED_MAX_EVIDENCE` | `5` | Maximum citations to include in evidence list |
+| `OPENAI_GROUNDED_MAX_TOKENS` | `6000` | Maximum output tokens for grounded requests |
+
+### Telemetry Fields
+
+The adapter records these fields in metadata for BigQuery analytics:
+
+- `provoker_retry_used`: Whether provoker retry was attempted
+- `synthesis_step_used`: Whether two-step synthesis was used
+- `synthesis_tool_count`: Number of tool calls from Step-A
+- `synthesis_evidence_count`: Number of citations in evidence list
+- `anchored_citations_count`: Citations with URL annotations (currently 0)
+- `unlinked_sources_count`: Citations without annotations
+
+### REQUIRED Mode Enforcement
+
+When `grounding_mode="REQUIRED"`, the adapter enforces strict grounding:
+1. Must have `tool_call_count > 0` (web searches performed)
+2. Must have `len(citations) > 0` (evidence extracted)
+3. Fails with `GroundingRequiredFailedError` if either condition not met
+
+### Citation Schema
+
+All citations are normalized to:
+```json
+{
+  "url": "https://...",
+  "title": "Article Title",
+  "domain": "example.com",
+  "source_type": "web_search_result | evidence_list | url_annotation"
+}
+```
+
+### Production Recommendations
+
+```bash
+# Production settings
+export OPENAI_GROUNDED_TWO_STEP=true  # Enable synthesis fallback
+export OPENAI_GROUNDED_MAX_TOKENS=6000  # Sufficient budget
+export OPENAI_GROUNDED_MAX_EVIDENCE=5  # Balanced evidence list
+```
+
 ---
-**Version**: 2.7.0 | **Status**: Production Ready | **Updated**: 2025-08-27
+**Version**: 2.7.1 | **Status**: Production Ready | **Updated**: 2025-09-05

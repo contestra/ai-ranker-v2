@@ -25,7 +25,11 @@ OPENAI_MAX_RETRIES = int(os.getenv("OPENAI_MAX_RETRIES", "5"))
 OPENAI_TIMEOUT_SECONDS = int(os.getenv("OPENAI_TIMEOUT_SECONDS", "60"))
 GROUNDED_MAX_OUTPUT_TOKENS = int(os.getenv("OPENAI_GROUNDED_MAX_TOKENS", "6000"))
 MIN_OUTPUT_TOKENS = 16  # Responses API minimum
+
+# Feature flags for grounded mode
+OPENAI_PROVOKER_ENABLED = os.getenv("OPENAI_PROVOKER_ENABLED", "true").lower() == "true"
 OPENAI_GROUNDED_TWO_STEP = os.getenv("OPENAI_GROUNDED_TWO_STEP", "false").lower() == "true"
+OPENAI_GROUNDED_MAX_EVIDENCE = int(os.getenv("OPENAI_GROUNDED_MAX_EVIDENCE", "5"))
 
 # TextEnvelope schema for ungrounded fallback (GPT-5 empty text quirk)
 TEXT_ENVELOPE_SCHEMA = {
@@ -366,12 +370,8 @@ class OpenAIAdapter:
                 metadata["tool_types"] = tool_types
                 metadata["grounded_evidence_present"] = tool_count > 0
                 
-                # REQUIRED mode enforcement
-                if grounding_mode == "REQUIRED" and tool_count == 0:
-                    metadata["fail_closed_reason"] = "no_tool_calls_with_required"
-                    raise GroundingRequiredFailedError(
-                        f"REQUIRED grounding specified but no tool calls made"
-                    )
+                # Early REQUIRED check - must have tool calls
+                # Final check happens after citation extraction
             else:
                 # Ungrounded: direct call
                 response = await self.client.responses.create(**payload, timeout=timeout)
@@ -424,8 +424,8 @@ class OpenAIAdapter:
                 metadata["anchored_citations_count"] = anchored_count
                 metadata["unlinked_sources_count"] = unlinked_count
                 
-                # Provoker retry: if we have searches but no content, try once more with a provoker
-                if tool_count > 0 and not content:
+                # Provoker retry: if enabled and we have searches but no content, try once more with a provoker
+                if OPENAI_PROVOKER_ENABLED and tool_count > 0 and not content:
                     logger.info("[OAI] Grounded response has searches but no content, trying provoker retry")
                     metadata["provoker_retry_used"] = True
                     
@@ -458,10 +458,10 @@ class OpenAIAdapter:
                         # Preserve Step-A citations for final response
                         step_a_citations = citations.copy() if citations else []
                         
-                        # Build evidence block from citations (top 5)
+                        # Build evidence block from citations (capped by OPENAI_GROUNDED_MAX_EVIDENCE)
                         evidence_lines = []
                         evidence_citations = []
-                        for i, cite in enumerate(citations[:5], 1):
+                        for i, cite in enumerate(citations[:OPENAI_GROUNDED_MAX_EVIDENCE], 1):
                             title = cite.get('title', 'Untitled')[:80]
                             url = cite.get('url', '')
                             if url:
@@ -514,12 +514,38 @@ class OpenAIAdapter:
                             metadata["synthesis_evidence_count"] = len(citations)
                 else:
                     metadata["provoker_retry_used"] = False
+                
+                # Initialize telemetry fields if not set
+                if "synthesis_step_used" not in metadata:
+                    metadata["synthesis_step_used"] = False
+                if "synthesis_tool_count" not in metadata:
+                    metadata["synthesis_tool_count"] = 0
+                if "synthesis_evidence_count" not in metadata:
+                    metadata["synthesis_evidence_count"] = 0
             else:
-                # Ungrounded - always set counts to 0
+                # Ungrounded - always set counts and flags to defaults
                 metadata["anchored_citations_count"] = 0
                 metadata["unlinked_sources_count"] = 0
+                metadata["provoker_retry_used"] = False
+                metadata["synthesis_step_used"] = False
+                metadata["synthesis_tool_count"] = 0
+                metadata["synthesis_evidence_count"] = 0
             
             metadata["text_source"] = source
+            
+            # Final REQUIRED enforcement for grounded mode
+            if is_grounded and grounding_mode == "REQUIRED":
+                # REQUIRED must have both tool calls AND citations
+                if tool_count == 0:
+                    metadata["fail_closed_reason"] = "no_tool_calls_with_required"
+                    raise GroundingRequiredFailedError(
+                        f"REQUIRED grounding specified but no tool calls made"
+                    )
+                if len(citations) == 0:
+                    metadata["fail_closed_reason"] = "no_citations_with_required"
+                    raise GroundingRequiredFailedError(
+                        f"REQUIRED grounding specified but no citations extracted from {tool_count} tool calls"
+                    )
             
             # Extract usage
             usage = {}
