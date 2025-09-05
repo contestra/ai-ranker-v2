@@ -244,52 +244,88 @@ class OpenAIAdapter:
         
         return count, types
     
-    def _extract_citations(self, response: Any) -> Tuple[List[Dict[str, Any]], int, int]:
-        """Extract citations from web_search_call items in response.
+    def _extract_openai_citations(self, response: Any, source_type: str = "web_search_result") -> Tuple[List[Dict[str, Any]], int, int]:
+        """Extract citations from OpenAI response.
         Returns: (citations list, anchored_count, unlinked_count)
         """
+        from urllib.parse import urlparse
+        
         citations = []
         anchored_count = 0
-        unlinked_count = 0
         seen_urls = set()
+        seen_domains = set()
         
         if hasattr(response, 'output') and isinstance(response.output, list):
             for item in response.output:
-                # Look for web_search_call or web_search_preview_call items
+                # Look for web_search_call items
                 if hasattr(item, 'type') and 'search' in item.type and 'call' in item.type:
-                    # Extract search results if available
+                    # Try different possible attributes for search results
+                    search_results = None
+                    
+                    # Try search_results attribute
                     if hasattr(item, 'search_results') and isinstance(item.search_results, list):
-                        for result in item.search_results:
-                            url = getattr(result, 'url', None)
-                            if url and url not in seen_urls:
-                                seen_urls.add(url)
+                        search_results = item.search_results
+                    # Try results attribute
+                    elif hasattr(item, 'results') and isinstance(item.results, list):
+                        search_results = item.results
+                    # Try web_results attribute
+                    elif hasattr(item, 'web_results') and isinstance(item.web_results, list):
+                        search_results = item.web_results
+                    
+                    if search_results:
+                        for result in search_results:
+                            url = getattr(result, 'url', None) or getattr(result, 'link', None)
+                            if url:
+                                # Normalize URL for deduplication
+                                normalized_url = url.lower().strip('/')
+                                if normalized_url in seen_urls:
+                                    continue
+                                seen_urls.add(normalized_url)
                                 
-                                # Extract domain from URL
+                                # Extract and normalize domain
+                                parsed = None
                                 try:
-                                    from urllib.parse import urlparse
                                     parsed = urlparse(url)
                                     domain = parsed.netloc.lower().replace('www.', '')
                                 except:
                                     domain = 'unknown'
                                 
-                                # Check if this is anchored (has annotation) or unlinked
-                                # OpenAI: url_citation or annotation types are anchored
-                                has_annotation = getattr(result, 'annotation', None) is not None
-                                source_type = 'annotation' if has_annotation else 'web_search'
+                                # Secondary dedup by domain (only keep first from each domain)
+                                domain_key = domain + '_' + (parsed.path[:50] if parsed else '')
+                                if domain_key in seen_domains and len(citations) >= 10:
+                                    continue
+                                seen_domains.add(domain_key)
                                 
+                                # Extract title
+                                title = getattr(result, 'title', '') or getattr(result, 'name', '') or ''
+                                
+                                # Check for anchored annotations (rare in OpenAI)
+                                has_annotation = getattr(result, 'annotation', None) is not None
                                 if has_annotation:
                                     anchored_count += 1
+                                    citation_type = "url_annotation"
                                 else:
-                                    unlinked_count += 1
+                                    citation_type = source_type
                                 
                                 citations.append({
                                     'url': url,
-                                    'title': getattr(result, 'title', ''),
+                                    'title': title[:200] if title else '',
                                     'domain': domain,
-                                    'source_type': source_type
+                                    'source_type': citation_type
                                 })
+                                
+                                # Limit to top 10 citations
+                                if len(citations) >= 10:
+                                    break
+        
+        # Calculate unlinked count
+        unlinked_count = len(citations) - anchored_count
         
         return citations, anchored_count, unlinked_count
+    
+    def _extract_citations(self, response: Any) -> Tuple[List[Dict[str, Any]], int, int]:
+        """Legacy wrapper for citation extraction - delegates to new method."""
+        return self._extract_openai_citations(response, source_type="web_search_result")
     
     async def complete(self, request: LLMRequest, timeout: int = 60) -> LLMResponse:
         """Complete request using Responses API only."""
@@ -419,13 +455,21 @@ class OpenAIAdapter:
                         metadata["synthesis_step_used"] = True
                         metadata["synthesis_tool_count"] = tool_count
                         
-                        # Build evidence block from citations
+                        # Preserve Step-A citations for final response
+                        step_a_citations = citations.copy() if citations else []
+                        
+                        # Build evidence block from citations (top 5)
                         evidence_lines = []
+                        evidence_citations = []
                         for i, cite in enumerate(citations[:5], 1):
                             title = cite.get('title', 'Untitled')[:80]
                             url = cite.get('url', '')
                             if url:
                                 evidence_lines.append(f"{i}) {title} — {url}")
+                                # Mark these as evidence_list type for Step-B
+                                evidence_cite = cite.copy()
+                                evidence_cite['source_type'] = 'evidence_list'
+                                evidence_citations.append(evidence_cite)
                         
                         metadata["synthesis_evidence_count"] = len(evidence_lines)
                         
@@ -458,6 +502,16 @@ class OpenAIAdapter:
                         response = await self.client.responses.create(**synthesis_payload, timeout=timeout)
                         content, source = self._extract_content(response, is_grounded=False)  # Use ungrounded extraction for synthesis
                         metadata["text_source"] = f"synthesis_{source}"
+                        
+                        # Use evidence citations from Step-A since Step-B has no tools
+                        if content and evidence_citations:
+                            citations = evidence_citations
+                            anchored_count = 0  # No anchored citations in synthesis
+                            unlinked_count = len(citations)
+                            metadata["citation_count"] = len(citations)
+                            metadata["anchored_citations_count"] = anchored_count
+                            metadata["unlinked_sources_count"] = unlinked_count
+                            metadata["synthesis_evidence_count"] = len(citations)
                 else:
                     metadata["provoker_retry_used"] = False
             else:
