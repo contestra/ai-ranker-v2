@@ -16,8 +16,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.llm.types import LLMRequest, LLMResponse, ALSContext
 from app.llm.models import validate_model, normalize_model
 from app.llm.tool_detection import normalize_tool_detection, attest_two_step_vertex
-from app.llm.adapters.openai_adapter import OpenAIAdapter
-from app.llm.adapters.vertex_adapter import VertexAdapter
 from app.models.models import LLMTelemetry
 from app.services.als.als_builder import ALSBuilder
 from app.core.config import get_settings
