@@ -3,6 +3,7 @@ OpenAI Adapter - Lean implementation using Responses API only.
 Focuses on shape conversion, policy enforcement, and telemetry.
 Transport/retries/backoff handled by SDK.
 """
+import hashlib
 import json
 import logging
 import os
@@ -345,7 +346,9 @@ class OpenAIAdapter:
             "timestamp": datetime.utcnow().isoformat(),
             "vendor": "openai",
             "model": request.model,
-            "response_api": "responses_sdk"
+            "response_api": "responses_sdk",
+            "provider_api_version": "openai:responses-v1 (sdk)",
+            "seed_key_id": os.getenv("OPENAI_SEED_KEY_ID", "v1_2025")
         }
         
         is_grounded = request.grounded
@@ -432,11 +435,14 @@ class OpenAIAdapter:
                     
                     # Add provoker message to input
                     utc_date = datetime.utcnow().strftime("%Y-%m-%d")
+                    provoker_text = f"As of today ({utc_date}), produce a concise final answer that directly answers the user and include at least one official source URL."
+                    metadata["provoker_value"] = provoker_text
+                    
                     provoker_payload = payload.copy()
                     provoker_payload["input"] = provoker_payload["input"].copy()
                     provoker_payload["input"].append({
                         "role": "user",
-                        "content": [{"type": "input_text", "text": f"As of today ({utc_date}), produce a concise final answer that directly answers the user and include at least one official source URL."}]
+                        "content": [{"type": "input_text", "text": provoker_text}]
                     })
                     
                     # Retry with provoker
@@ -515,6 +521,7 @@ class OpenAIAdapter:
                             metadata["synthesis_evidence_count"] = len(citations)
                 else:
                     metadata["provoker_retry_used"] = False
+                    metadata["provoker_value"] = None  # No provoker used
                 
                 # Initialize telemetry fields if not set
                 if "synthesis_step_used" not in metadata:
@@ -523,6 +530,8 @@ class OpenAIAdapter:
                     metadata["synthesis_tool_count"] = 0
                 if "synthesis_evidence_count" not in metadata:
                     metadata["synthesis_evidence_count"] = 0
+                if "provoker_value" not in metadata:
+                    metadata["provoker_value"] = None
             else:
                 # Ungrounded - always set counts and flags to defaults
                 metadata["anchored_citations_count"] = 0
@@ -531,6 +540,7 @@ class OpenAIAdapter:
                 metadata["synthesis_step_used"] = False
                 metadata["synthesis_tool_count"] = 0
                 metadata["synthesis_evidence_count"] = 0
+                metadata["provoker_value"] = None
                 metadata["why_not_grounded"] = "not_requested"  # User didn't request grounding
             
             metadata["text_source"] = source
@@ -559,6 +569,13 @@ class OpenAIAdapter:
                     "reasoning_tokens": getattr(usage_obj, 'reasoning_tokens', 0),
                     "total_tokens": getattr(usage_obj, 'total_tokens', 0)
                 }
+            
+            # Calculate response hash for provenance
+            if content:
+                content_bytes = content.encode('utf-8')
+                metadata["response_output_sha256"] = hashlib.sha256(content_bytes).hexdigest()
+            else:
+                metadata["response_output_sha256"] = None
             
             # Calculate latency
             latency_ms = int((time.perf_counter() - start_time) * 1000)

@@ -116,6 +116,11 @@ The adapter records these fields in metadata for BigQuery analytics:
 - `synthesis_evidence_count`: Number of citations in evidence list
 - `anchored_citations_count`: Citations with URL annotations (currently 0)
 - `unlinked_sources_count`: Citations without annotations
+- `why_not_grounded`: Reason grounding wasn't applied (None or "not_requested")
+- `provider_api_version`: API version identifier ("openai:responses-v1 (sdk)")
+- `seed_key_id`: Seed key for reproducibility
+- `provoker_value`: The actual provoker text used (if any)
+- `response_output_sha256`: SHA256 hash of response content for provenance
 
 ### REQUIRED Mode Enforcement
 
