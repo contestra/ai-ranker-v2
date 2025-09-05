@@ -294,8 +294,8 @@ class GeminiAdapter:
             
             if thinking_budget is not None:
                 thinking_config = ThinkingConfig(
-                    thinkingBudget=thinking_budget,
-                    includeThoughts=include_thoughts
+                    thinking_budget=thinking_budget,
+                    include_thoughts=include_thoughts
                 )
                 metadata["thinking_budget_tokens"] = thinking_budget
                 metadata["include_thoughts"] = include_thoughts
@@ -307,7 +307,7 @@ class GeminiAdapter:
             response_mime_type="text/plain",
             safety_settings=safety_settings,
             system_instruction=system_instruction,  # Add system instruction to config
-            thinkingConfig=thinking_config  # Add thinking config
+            thinking_config=thinking_config  # Add thinking config with correct snake_case
         )
         
         # Determine if we need JSON output and how to achieve it
