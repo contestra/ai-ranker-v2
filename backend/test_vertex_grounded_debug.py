@@ -1,127 +1,74 @@
 #!/usr/bin/env python3
-"""Debug Vertex grounded mode NoneType error."""
+"""Debug test for Vertex grounded to see why grounding isn't triggered."""
 
 import asyncio
-import json
 import os
 import sys
-from datetime import datetime
-import traceback
+import json
+import logging
+from pathlib import Path
 
-# Add the app module to the path
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# Set up detailed logging
+logging.basicConfig(level=logging.DEBUG, format='%(name)s - %(levelname)s - %(message)s')
 
-# Load environment variables
+sys.path.insert(0, str(Path(__file__).parent))
 from dotenv import load_dotenv
 load_dotenv()
 
-# Set required environment variables
-os.environ["LLM_TIMEOUT_UN"] = "60"
-os.environ["LLM_TIMEOUT_GR"] = "120"
-os.environ["GEMINI_PRO_THINKING_BUDGET"] = "256"
-os.environ["GEMINI_PRO_MAX_OUTPUT_TOKENS_UNGROUNDED"] = "768"
-os.environ["GEMINI_PRO_MAX_OUTPUT_TOKENS_GROUNDED"] = "1536"
+from app.llm.types import LLMRequest
+from app.llm.adapters.vertex_adapter import VertexAdapter
+from app.llm.adapters.gemini_adapter import GeminiAdapter
 
-
-async def test_vertex_grounded():
-    """Test Vertex grounded mode and debug NoneType error."""
-    from app.llm.unified_llm_adapter import UnifiedLLMAdapter
-    from app.llm.types import LLMRequest
+async def test_both_adapters():
+    """Test the same grounded request on both adapters to compare."""
     
-    adapter = UnifiedLLMAdapter()
-    
-    print("\n" + "="*80)
-    print("VERTEX GROUNDED MODE DEBUG")
-    print("="*80 + "\n")
-    
-    # Create grounded request
     request = LLMRequest(
-        vendor="vertex",
-        model="gemini-2.5-pro",
+        vendor='test',
+        model='gemini-2.5-pro',
         messages=[
-            {
-                "role": "user",
-                "content": "Tell me the primary health and wellness news during August 2025"
-            }
+            {'role': 'user', 'content': 'What are the latest AI developments in December 2024?'}
         ],
         grounded=True,
-        max_tokens=1536,
-        temperature=0.7,
-        als_context={
-            "country_code": "DE",
-            "locale": "de-DE"
+        max_tokens=300,
+        temperature=0.0,
+        meta={
+            'grounding_mode': 'AUTO'
         }
     )
     
-    request.metadata = {
-        "als_country": "DE",
-        "als_locale": "de-DE",
-        "als_present": True,
-        "thinking_budget_tokens": 256
-    }
+    print("=" * 70)
+    print("Testing SAME request on both adapters")
+    print("=" * 70)
     
-    request.meta = {"grounding_mode": "AUTO"}
-    
+    # Test Gemini Direct
+    print("\n1. Testing Gemini Direct Adapter:")
+    print("-" * 40)
     try:
-        print("🚀 Executing request...")
-        response = await adapter.complete(request)
-        
-        # Display results
-        print("\n" + "="*80)
-        print("RESULTS")
-        print("="*80)
-        print(f"\n✅ Success: {response.success}")
-        print(f"📝 Content Length: {len(response.content) if response.content else 0} chars")
-        
-        if response.content:
-            print(f"\nContent Preview:\n{response.content[:500]}...")
-        else:
-            print("\n⚠️ EMPTY CONTENT RETURNED")
-        
-        if hasattr(response, 'metadata') and response.metadata:
-            print(f"\n📊 Metadata:")
-            for key, value in response.metadata.items():
-                if key != 'raw_response':  # Skip raw response in output
-                    print(f"  - {key}: {value}")
-        
-        if hasattr(response, 'citations') and response.citations:
-            print(f"\n📚 Citations: {len(response.citations)}")
-            for i, cite in enumerate(response.citations[:3], 1):
-                print(f"\n  Citation {i}:")
-                print(f"    URL: {cite.get('url', 'N/A')}")
-                print(f"    Title: {cite.get('title', 'N/A')[:80]}")
-        
+        gemini_adapter = GeminiAdapter()
+        response = await gemini_adapter.complete(request, timeout=30)
+        print(f"✅ Success: {response.success}")
+        print(f"Grounded effective: {response.grounded_effective}")
+        if hasattr(response, 'metadata'):
+            print(f"Tool calls: {response.metadata.get('tool_call_count', 0)}")
+            print(f"Evidence present: {response.metadata.get('grounded_evidence_present', False)}")
+        print(f"Content length: {len(response.content) if response.content else 0}")
     except Exception as e:
-        print(f"\n❌ Error: {str(e)}")
-        print("\n📋 Full Traceback:")
-        traceback.print_exc()
-        
-        # Try to debug the error location
-        print("\n🔍 Debugging error location...")
-        
-        # Check if it's in the adapter
-        try:
-            from app.llm.adapters.vertex_adapter import VertexAdapter
-            va = adapter.vertex_adapter
-            
-            # Create a minimal request to test
-            print("\nTrying minimal grounded request...")
-            minimal_request = LLMRequest(
-                vendor="vertex",
-                model="gemini-2.5-pro",
-                messages=[{"role": "user", "content": "What is 2+2?"}],
-                grounded=True,
-                max_tokens=100
-            )
-            
-            # Try to call directly
-            result = await va.complete(minimal_request)
-            print(f"Minimal test success: {result.success}")
-            
-        except Exception as e2:
-            print(f"Minimal test also failed: {str(e2)}")
-            traceback.print_exc()
-
+        print(f"❌ Error: {e}")
+    
+    print("\n2. Testing Vertex Adapter:")
+    print("-" * 40)
+    try:
+        vertex_adapter = VertexAdapter()
+        response = await vertex_adapter.complete(request, timeout=30)
+        print(f"✅ Success: {response.success}")
+        print(f"Grounded effective: {response.grounded_effective}")
+        if hasattr(response, 'metadata'):
+            print(f"Tool calls: {response.metadata.get('tool_call_count', 0)}")
+            print(f"Evidence present: {response.metadata.get('grounded_evidence_present', False)}")
+            print(f"Region: {response.metadata.get('region')}")
+        print(f"Content length: {len(response.content) if response.content else 0}")
+    except Exception as e:
+        print(f"❌ Error: {e}")
 
 if __name__ == "__main__":
-    asyncio.run(test_vertex_grounded())
+    asyncio.run(test_both_adapters())

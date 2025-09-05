@@ -1,14 +1,12 @@
 {
   "permissions": {
     "allow": [
-      "Bash(git add:*)",
-      "Bash(git commit:*)",
-      "Bash(python3:*)",
-      "Bash(timeout 60 python3 test_openai_citations_real.py)",
-      "Bash(git push:*)",
-      "Bash(grep:*)",
-      "Bash(timeout 60 python3 test_thinking_config.py)",
-      "Bash(timeout 60 python3:*)"
+      "Bash(VERTEX_LOCATION=us-central1 python3 test_vertex_als_de.py)",
+      "Bash(VERTEX_LOCATION=us-central1 python3 test_vertex_als_de_simple.py)",
+      "Bash(REQUIRED_RELAX_FOR_GOOGLE=true python3 test_required_centralized.py)",
+      "Bash(VERTEX_LOCATION=us-central1 python3 test_vertex_health_news.py)",
+      "Bash(OPENAI_PROVOKER_ENABLED=false python3 test_gpt5_health_news.py)",
+      "Bash(export OPENAI_PROVOKER_ENABLED=false)"
     ],
     "deny": [],
     "ask": [],

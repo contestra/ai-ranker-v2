@@ -140,11 +140,10 @@ class OpenAIAdapter:
                 # Router says this model supports reasoning hints
                 reasoning_effort = request.meta.get("reasoning_effort", "minimal") if request.meta else "minimal"
                 payload["reasoning"] = {"effort": reasoning_effort}
-                metadata["reasoning_effort_applied"] = reasoning_effort
+                # Note: metadata tracking happens in complete() method, not here
             elif reasoning_requested:
                 # Reasoning was requested but not supported
-                metadata["reasoning_hint_dropped"] = True
-                metadata["reasoning_hint_drop_reason"] = "model_not_capable"
+                # Note: metadata tracking happens in complete() method, not here
                 logger.debug(f"[OPENAI] Dropped reasoning hint for non-reasoning model: {request.model}")
         
         # Add JSON schema if requested
@@ -179,13 +178,20 @@ class OpenAIAdapter:
             return response, web_tool_type
         except Exception as e:
             error_str = str(e)
-            # If web_search not supported, try fallback
-            if "unsupported" in error_str.lower() or "web_search" in error_str:
+            lower = error_str.lower()
+            
+            # Only switch to preview if the error explicitly says web_search is unsupported
+            # Do NOT switch if preview itself is unsupported
+            if "hosted tool 'web_search' is not supported" in lower:
                 logger.info("[OAI] web_search unsupported, trying web_search_preview")
                 payload["tools"] = [{"type": "web_search_preview"}]
                 web_tool_type = "web_search_preview"
                 response = await self.client.responses.create(**payload, timeout=timeout)
                 return response, web_tool_type
+            elif "hosted tool 'web_search_preview' is not supported" in lower:
+                # Preview is explicitly unsupported - fail closed with clear error
+                logger.warning("[OAI] web_search_preview not supported for this model, failing closed")
+                raise ValueError(f"Grounding not supported for model {payload.get('model')}: {error_str}")
             raise
     
     def _extract_content(self, response: Any, is_grounded: bool = False) -> Tuple[str, str]:
@@ -400,6 +406,16 @@ class OpenAIAdapter:
             effective_model = payload["model"]
             if effective_model != request.model:
                 metadata["mapped_model"] = effective_model
+            
+            # Track reasoning hints in metadata (was attempted in _build_payload but metadata not available there)
+            caps = request.metadata.get("capabilities", {}) if hasattr(request, 'metadata') and request.metadata else {}
+            reasoning_requested = request.meta and request.meta.get("reasoning_effort") is not None
+            
+            if caps.get("supports_reasoning_effort", False) and "reasoning" in payload:
+                metadata["reasoning_effort_applied"] = payload["reasoning"].get("effort", "minimal")
+            elif reasoning_requested:
+                metadata["reasoning_hint_dropped"] = True
+                metadata["reasoning_hint_drop_reason"] = "model_not_capable"
             
             # Make API call
             if is_grounded:
