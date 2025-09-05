@@ -125,7 +125,7 @@ def _extract_citations_from_grounding(response) -> Tuple[List[Dict[str, Any]], i
             continue
             
         # Extract grounding_chunks (web search results) - these are unlinked
-        grounding_chunks = getattr(grounding_metadata, "grounding_chunks", [])
+        grounding_chunks = getattr(grounding_metadata, "grounding_chunks", []) or []
         for chunk in grounding_chunks:
             web = getattr(chunk, "web", None)
             if web:
@@ -142,7 +142,7 @@ def _extract_citations_from_grounding(response) -> Tuple[List[Dict[str, Any]], i
                     unlinked_count += 1  # Grounding chunks are unlinked evidence
         
         # Extract search_queries (what was searched) - these are also unlinked
-        search_queries = getattr(grounding_metadata, "search_queries", [])
+        search_queries = getattr(grounding_metadata, "search_queries", []) or []
         for query in search_queries:
             citations.append({
                 "query": query,
@@ -330,50 +330,39 @@ class VertexAdapter:
             metadata["grounding_mode_requested"] = grounding_mode
             
             if json_schema_requested:
-                # Grounded + JSON: Use FFC (schema-as-tool) with GoogleSearch
-                # Create function declaration for the JSON schema
-                emit_result_func = FunctionDeclaration(
-                    name="emit_result",
-                    description="Emit the structured result in the requested format",
-                    parameters=json_schema['schema']
-                )
+                # Grounded + JSON: VERTEX LIMITATION - Cannot mix GoogleSearch with function declarations
+                # API Error: "Multiple tools are supported only when they are all search tools"
+                # Must use two-step approach or response_schema (which may not execute search)
                 
-                # Add both GoogleSearch and emit_result tools
-                gen_config.tools = [
-                    Tool(google_search=GoogleSearch()),
-                    Tool(function_declarations=[emit_result_func])
-                ]
+                # Option 1: Try response_schema with GoogleSearch (may not execute)
+                # Option 2: Two-step - grounding first, then JSON synthesis
+                
+                # For now, use GoogleSearch with instruction to output JSON
+                gen_config.tools = [Tool(google_search=GoogleSearch())]
+                
+                # Add JSON instruction to prompt
+                json_inst = f"\n\nIMPORTANT: You must search for current information first, then output your response as valid JSON data (not the schema) that conforms to this structure:\n{json.dumps(json_schema['schema'], indent=2)}\n\nDo not output the schema itself - output actual data matching the schema."
+                if gen_config.system_instruction:
+                    gen_config.system_instruction = gen_config.system_instruction + json_inst
+                else:
+                    gen_config.system_instruction = json_inst
+                
                 metadata["web_tool_type"] = "google_search"
-                metadata["schema_tool_present"] = True
-                
-                # Force the model to call emit_result
-                gen_config.tool_config = ToolConfig(
-                    function_calling_config=FunctionCallingConfig(
-                        mode="ANY",
-                        allowed_function_names=["emit_result"]
-                    )
-                )
-                metadata["grounding_mode_enforced"] = "FFC_ANY_with_schema"
+                metadata["grounding_with_json_instruction"] = True
+                metadata["vertex_limitation"] = "cannot_mix_search_and_functions"
+                metadata["grounding_mode_enforced"] = "POST_CALL"
             else:
                 # Grounded without JSON: Regular grounding tools
                 gen_config.tools = [Tool(google_search=GoogleSearch())]
                 metadata["web_tool_type"] = "google_search"
                 
-                # Configure tool calling based on mode
-                if grounding_mode == "REQUIRED":
-                    # Force function calling for REQUIRED mode
-                    gen_config.tool_config = ToolConfig(
-                        function_calling_config=FunctionCallingConfig(
-                            mode="ANY",
-                            allowed_function_names=["google_search"]
-                        )
-                    )
-                    metadata["grounding_mode_enforced"] = "FFC_ANY"
-                else:
-                    # AUTO mode - let model decide
-                    gen_config.tool_config = ToolConfig(
-                        function_calling_config=FunctionCallingConfig(mode="AUTO")
-                    )
+                # Configure tool calling - GoogleSearch is a built-in tool, not a function
+                # Both AUTO and REQUIRED modes use AUTO for tool selection
+                # REQUIRED enforcement happens post-call in the router
+                gen_config.tool_config = ToolConfig(
+                    function_calling_config=FunctionCallingConfig(mode="AUTO")
+                )
+                metadata["grounding_mode_enforced"] = "POST_CALL"  # Router enforces REQUIRED
         elif json_schema_requested:
             # Ungrounded + JSON: Use JSON Mode
             gen_config.response_mime_type = "application/json"
@@ -391,14 +380,31 @@ class VertexAdapter:
             # Extract content - check for emit_result function call first
             func_name, func_args = _extract_function_call(response)
             
-            if func_name == "emit_result" and func_args:
-                # Grounded + JSON case: extract structured data from function args
-                content = json.dumps(func_args) if isinstance(func_args, dict) else str(func_args)
-                metadata["schema_tool_invoked"] = True
-            else:
-                # Regular text extraction
-                content = _extract_text_from_response(response)
-                metadata["schema_tool_invoked"] = False
+            # Extract content
+            content = _extract_text_from_response(response)
+            
+            # For grounded+JSON, try to extract JSON from response
+            if metadata.get("grounding_with_json_instruction"):
+                # Try to find JSON in the response (may be wrapped in markdown)
+                if content:
+                    # Remove markdown code block if present
+                    if content.strip().startswith('```json'):
+                        content = content.strip()[7:]  # Remove ```json
+                        if content.endswith('```'):
+                            content = content[:-3]  # Remove trailing ```
+                        content = content.strip()
+                    elif content.strip().startswith('```'):
+                        content = content.strip()[3:]  # Remove ```
+                        if content.endswith('```'):
+                            content = content[:-3]  # Remove trailing ```
+                        content = content.strip()
+                    
+                    try:
+                        # Validate it's proper JSON
+                        json.loads(content)
+                        metadata["json_extracted"] = True
+                    except:
+                        metadata["json_extracted"] = False
             
             # Extract citations if grounded
             citations = []
@@ -410,20 +416,19 @@ class VertexAdapter:
                 metadata["anchored_citations_count"] = anchored_count
                 metadata["unlinked_sources_count"] = unlinked_count
                 
-                # Check for GoogleSearch invocation
-                if func_name == "google_search":
-                    tool_call_count = 1
-                    grounded_effective = True
-                
-                # Also check grounding metadata
-                if not grounded_effective:
-                    for cand in response.candidates or []:
-                        if getattr(cand, "grounding_metadata", None):
-                            chunks = getattr(cand.grounding_metadata, "grounding_chunks", [])
-                            if chunks:
-                                tool_call_count = 1
-                                grounded_effective = True
-                                break
+                # Primary signal: Check grounding metadata (not function names)
+                # Vertex populates grounding_metadata when GoogleSearch runs
+                grounded_effective = False
+                for cand in response.candidates or []:
+                    grounding_meta = getattr(cand, "grounding_metadata", None)
+                    if grounding_meta:
+                        # Check for actual grounding evidence
+                        chunks = getattr(grounding_meta, "grounding_chunks", []) or []
+                        queries = getattr(grounding_meta, "search_queries", []) or []
+                        if chunks or queries:
+                            grounded_effective = True
+                            tool_call_count = 1  # GoogleSearch ran
+                            break
                 
                 metadata["tool_call_count"] = tool_call_count
                 metadata["grounded_evidence_present"] = grounded_effective
