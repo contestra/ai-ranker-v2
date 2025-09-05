@@ -14,8 +14,9 @@ from typing import Any, Dict, List, Optional, Tuple
 from openai import AsyncOpenAI
 
 from app.core.config import get_settings
-from app.llm.errors import GroundingRequiredFailedError
+# GroundingRequiredFailedError removed - REQUIRED enforcement now in router only
 from app.llm.models import OPENAI_ALLOWED_MODELS, validate_model
+from app.llm.als_config import ALSConfig
 from app.llm.types import LLMRequest, LLMResponse
 
 logger = logging.getLogger(__name__)
@@ -66,12 +67,6 @@ class OpenAIAdapter:
             f"max_retries={OPENAI_MAX_RETRIES}, timeout={OPENAI_TIMEOUT_SECONDS}s"
         )
     
-    def _map_model(self, model: str) -> str:
-        """Map chat variants to base model for Responses API."""
-        if "-chat" in model:
-            return model.replace("-chat", "")
-        return model
-    
     def _build_payload(self, request: LLMRequest, is_grounded: bool) -> Dict:
         """Build Responses API payload preserving full conversation history."""
         # Preserve full conversation history
@@ -100,7 +95,8 @@ class OpenAIAdapter:
             # Skip any other roles for now
         
         # Base payload
-        effective_model = self._map_model(request.model)
+        # Use the model exactly as provided - no silent rewrites (router enforces immutability)
+        effective_model = request.model
         
         if is_grounded:
             # Grounded: use higher default (6000) to avoid token starvation
@@ -119,7 +115,7 @@ class OpenAIAdapter:
             # Tool choice for grounding mode
             # Note: web_search only supports "auto" tool_choice
             # NOTE: web_search only supports tool_choice="auto".
-            # REQUIRED grounding is enforced post-response (tool_call_count+citations).
+            # Router handles REQUIRED mode enforcement centrally
             payload["tool_choice"] = "auto"
             
             # Add text format to ensure final synthesis
@@ -138,10 +134,18 @@ class OpenAIAdapter:
             
             # Honor router capabilities for reasoning hints
             caps = request.metadata.get("capabilities", {}) if hasattr(request, 'metadata') and request.metadata else {}
+            reasoning_requested = request.meta and request.meta.get("reasoning_effort") is not None
+            
             if caps.get("supports_reasoning_effort", False):
                 # Router says this model supports reasoning hints
                 reasoning_effort = request.meta.get("reasoning_effort", "minimal") if request.meta else "minimal"
                 payload["reasoning"] = {"effort": reasoning_effort}
+                metadata["reasoning_effort_applied"] = reasoning_effort
+            elif reasoning_requested:
+                # Reasoning was requested but not supported
+                metadata["reasoning_hint_dropped"] = True
+                metadata["reasoning_hint_drop_reason"] = "model_not_capable"
+                logger.debug(f"[OPENAI] Dropped reasoning hint for non-reasoning model: {request.model}")
         
         # Add JSON schema if requested
         json_schema = request.meta.get("json_schema") if request.meta else None
@@ -334,6 +338,36 @@ class OpenAIAdapter:
         """Legacy wrapper for citation extraction - delegates to new method."""
         return self._extract_openai_citations(response, source_type="web_search_result")
     
+    def _standardize_finish_reason(self, reason: str) -> str:
+        """Standardize finish reasons for cross-vendor comparison.
+        
+        Maps vendor-specific finish reasons to common values:
+        - STOP: Normal completion
+        - MAX_TOKENS: Hit token limit
+        - SAFETY: Content filtered for safety
+        - ERROR: Error occurred
+        - UNKNOWN: Unknown reason
+        """
+        if not reason:
+            return "UNKNOWN"
+        
+        reason_lower = reason.lower()
+        
+        # Map OpenAI reasons to standardized values
+        if reason_lower in ("stop", "stopped", "complete", "completed"):
+            return "STOP"
+        elif reason_lower in ("length", "max_tokens", "token_limit"):
+            return "MAX_TOKENS"
+        elif reason_lower in ("content_filter", "safety", "blocked"):
+            return "SAFETY"
+        elif reason_lower in ("error", "failed"):
+            return "ERROR"
+        elif reason_lower == "tool_calls_only":
+            return "TOOL_CALLS"  # OpenAI-specific but useful to track
+        else:
+            # Keep original if no mapping found
+            return reason.upper()
+    
     async def complete(self, request: LLMRequest, timeout: int = 60) -> LLMResponse:
         """Complete request using Responses API only."""
         start_time = time.perf_counter()
@@ -344,14 +378,18 @@ class OpenAIAdapter:
             raise ValueError(f"Invalid OpenAI model: {msg}")
         
         # Prepare metadata
+        seed_key_id = ALSConfig.get_seed_key_id("openai")
         metadata = {
             "timestamp": datetime.utcnow().isoformat(),
             "vendor": "openai",
             "model": request.model,
             "response_api": "responses_sdk",
             "provider_api_version": "openai:responses-v1 (sdk)",
-            "seed_key_id": os.getenv("OPENAI_SEED_KEY_ID", "v1_2025")
+            "seed_key_id": seed_key_id
         }
+        
+        # Mark ALS provenance in metadata
+        ALSConfig.mark_als_metadata(metadata, seed_key_id, "openai")
         
         is_grounded = request.grounded
         grounding_mode = request.meta.get("grounding_mode", "AUTO") if request.meta and is_grounded else None
@@ -367,7 +405,12 @@ class OpenAIAdapter:
             if is_grounded:
                 # Grounded: negotiate tool type
                 response, web_tool_type = await self._call_with_tool_negotiation(payload, timeout)
-                metadata["web_tool_type"] = web_tool_type
+                # Always track both initial and final tool types
+                metadata["web_tool_type_initial"] = "web_search"  # Always starts with web_search
+                metadata["web_tool_type_final"] = web_tool_type
+                metadata["web_tool_type"] = web_tool_type  # Keep for backward compatibility
+                if web_tool_type != "web_search":
+                    metadata["web_tool_type_negotiated"] = True
                 
                 # Extract tool evidence
                 tool_count, tool_types = self._count_tool_calls(response)
@@ -434,6 +477,8 @@ class OpenAIAdapter:
                 if OPENAI_PROVOKER_ENABLED and tool_count > 0 and not content:
                     logger.info("[OAI] Grounded response has searches but no content, trying provoker retry")
                     metadata["provoker_retry_used"] = True
+                    metadata["provoker_initial_tool_type"] = web_tool_type  # What we used before retry
+                    metadata["initial_empty_reason"] = "search_only_output"  # Document why initial was empty
                     
                     # Add provoker message to input
                     utc_date = datetime.utcnow().strftime("%Y-%m-%d")
@@ -448,8 +493,18 @@ class OpenAIAdapter:
                     })
                     
                     # Retry with provoker
-                    response, _ = await self._call_with_tool_negotiation(provoker_payload, timeout)
+                    response, retry_tool_type = await self._call_with_tool_negotiation(provoker_payload, timeout)
                     content, source = self._extract_content(response, is_grounded=True)
+                    
+                    # Track both initial and final tool types for retry
+                    metadata["provoker_final_tool_type"] = retry_tool_type
+                    if retry_tool_type != web_tool_type:
+                        metadata["provoker_tool_type_changed"] = True
+                        logger.info(f"[OAI] Tool type changed from {web_tool_type} to {retry_tool_type} during provoker retry")
+                    
+                    # Update the final tool type for overall tracking
+                    metadata["web_tool_type_final"] = retry_tool_type
+                    metadata["web_tool_type"] = retry_tool_type  # Update for backward compatibility
                     
                     # Re-extract citations from the new response
                     if content:
@@ -463,6 +518,7 @@ class OpenAIAdapter:
                         logger.info("[OAI] Provoker failed, attempting two-step synthesis")
                         metadata["synthesis_step_used"] = True
                         metadata["synthesis_tool_count"] = tool_count
+                        metadata["provoker_no_content_reason"] = "persistent_empty_after_provoker"
                         
                         # Preserve Step-A citations for final response
                         step_a_citations = citations.copy() if citations else []
@@ -521,6 +577,14 @@ class OpenAIAdapter:
                             metadata["anchored_citations_count"] = anchored_count
                             metadata["unlinked_sources_count"] = unlinked_count
                             metadata["synthesis_evidence_count"] = len(citations)
+                        else:
+                            # Even two-step failed to produce content
+                            metadata["synthesis_no_content_reason"] = "two_step_synthesis_failed"
+                            logger.warning("[OAI] Two-step synthesis still produced no content")
+                    else:
+                        # Provoker succeeded or wasn't attempted for two-step
+                        if not content:
+                            metadata["provoker_no_content_reason"] = "provoker_retry_empty"
                 else:
                     metadata["provoker_retry_used"] = False
                     metadata["provoker_value"] = None  # No provoker used
@@ -547,19 +611,14 @@ class OpenAIAdapter:
             
             metadata["text_source"] = source
             
-            # Final REQUIRED enforcement for grounded mode
-            if is_grounded and grounding_mode == "REQUIRED":
-                # REQUIRED must have both tool calls AND citations
-                if tool_count == 0:
-                    metadata["fail_closed_reason"] = "no_tool_calls_with_required"
-                    raise GroundingRequiredFailedError(
-                        f"REQUIRED grounding specified but no tool calls made"
-                    )
-                if len(citations) == 0:
-                    metadata["fail_closed_reason"] = "no_citations_with_required"
-                    raise GroundingRequiredFailedError(
-                        f"REQUIRED grounding specified but no citations extracted from {tool_count} tool calls"
-                    )
+            # Final diagnostic: log if we still have no content after all attempts
+            if is_grounded and tool_count > 0 and not content:
+                logger.warning(f"[OAI] Grounded response has {tool_count} tool calls but still no output_text after all retries")
+                metadata["final_empty_reason"] = metadata.get("synthesis_no_content_reason") or metadata.get("provoker_no_content_reason") or "all_attempts_failed"
+                metadata["empty_despite_tools"] = True
+            
+            # REQUIRED mode enforcement removed - now handled centrally in router
+            # Adapter only reports the facts: tool_call_count, citations, etc.
             
             # Extract usage
             usage = {}
@@ -571,6 +630,47 @@ class OpenAIAdapter:
                     "reasoning_tokens": getattr(usage_obj, 'reasoning_tokens', 0),
                     "total_tokens": getattr(usage_obj, 'total_tokens', 0)
                 }
+                # Also store in metadata for telemetry parity
+                metadata["usage"] = usage
+            
+            # Extract finish_reason for telemetry parity with Google adapters
+            # Harmonized with Google path for cross-vendor comparisons
+            finish_reason = None
+            finish_reason_source = None
+            
+            # Priority 1: Check if SDK provides finish_reason (future-proofing)
+            if hasattr(response, 'finish_reason') and response.finish_reason is not None:
+                finish_reason = str(response.finish_reason)
+                finish_reason_source = "sdk_native"
+            # Priority 2: Check for stop_reason (current SDK field)
+            elif hasattr(response, 'stop_reason') and response.stop_reason is not None:
+                finish_reason = str(response.stop_reason)
+                finish_reason_source = "stop_reason"
+            # Priority 3: Infer from response characteristics
+            else:
+                if content:
+                    # If we have content, likely finished normally
+                    finish_reason = "stop"
+                    finish_reason_source = "inferred_from_content"
+                elif tool_count > 0:
+                    # If we have tools but no content, might be a synthesis issue
+                    finish_reason = "tool_calls_only"
+                    finish_reason_source = "inferred_from_tools"
+                else:
+                    # No clear signal
+                    finish_reason = "unknown"
+                    finish_reason_source = "no_signal"
+            
+            # Store in metadata - harmonized with Google adapters
+            metadata["finish_reason"] = finish_reason
+            metadata["finish_reason_source"] = finish_reason_source
+            
+            # Map to standardized values for cross-vendor comparison
+            # Google uses: STOP, MAX_TOKENS, SAFETY, etc.
+            # OpenAI uses: stop, length, content_filter, etc.
+            standardized = self._standardize_finish_reason(finish_reason)
+            if standardized != finish_reason:
+                metadata["finish_reason_standardized"] = standardized
             
             # Calculate response hash for provenance
             if content:
@@ -598,8 +698,7 @@ class OpenAIAdapter:
                 citations=citations
             )
             
-        except GroundingRequiredFailedError:
-            raise
+        # GroundingRequiredFailedError handling removed - router enforces REQUIRED
         except Exception as e:
             # Let SDK errors bubble up naturally
             logger.error(f"[OAI] API error: {str(e)[:200]}")

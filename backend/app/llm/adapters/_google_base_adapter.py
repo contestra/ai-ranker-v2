@@ -12,7 +12,7 @@ import os
 import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import parse_qs, urlparse, urlunparse, unquote, unquote_plus
+from urllib.parse import parse_qs, urlparse, urlunparse, unquote, unquote_plus, urlencode
 
 import google.genai as genai
 from google.genai.types import (
@@ -21,7 +21,7 @@ from google.genai.types import (
     ThinkingConfig, Tool, ToolConfig
 )
 
-from app.llm.errors import GroundingRequiredFailedError
+# GroundingRequiredFailedError removed - REQUIRED enforcement now in router only
 from app.llm.types import LLMRequest, LLMResponse
 from app.llm.models import validate_model
 
@@ -131,8 +131,10 @@ def _normalize_url(url: str) -> str:
         p = p._replace(fragment="", netloc=(p.netloc or "").lower())
         if p.query:
             q = parse_qs(p.query, keep_blank_values=True)
+            # Filter out utm_* tracking parameters
             q = {k: v for k, v in q.items() if not k.lower().startswith("utm_")}
-            p = p._replace(query="&".join(f"{k}={v}" for k, vs in q.items() for v in vs) if q else "")
+            # Use urlencode with doseq=True to properly handle multiple values and escaping
+            p = p._replace(query=urlencode(q, doseq=True) if q else "")
         return urlunparse(p)
     except Exception:
         return url
@@ -280,6 +282,10 @@ class GoogleBaseAdapter:
 
         # Thinking config
         thinking_config = None
+        thinking_requested = (hasattr(request, "meta") and request.meta and 
+                             (request.meta.get("thinking_budget") is not None or 
+                              request.meta.get("include_thoughts") is not None))
+        
         if caps.get("supports_thinking_budget", False):
             thinking_budget = request.metadata.get("thinking_budget_tokens") if hasattr(request, "metadata") else None
             include_thoughts = False
@@ -290,6 +296,12 @@ class GoogleBaseAdapter:
                 thinking_config = ThinkingConfig(thinking_budget=thinking_budget, include_thoughts=include_thoughts)
                 metadata["thinking_budget_tokens"] = thinking_budget
                 metadata["include_thoughts"] = include_thoughts
+                metadata["thinking_hint_applied"] = True
+        elif thinking_requested:
+            # Thinking was requested but not supported
+            metadata["thinking_hint_dropped"] = True
+            metadata["thinking_hint_drop_reason"] = "model_not_capable"
+            logger.debug(f"[GOOGLE_BASE] Dropped thinking hint for non-thinking model: {request.model}")
 
         gen_config = GenerateContentConfig(
             max_output_tokens=max_tokens,
@@ -327,11 +339,17 @@ class GoogleBaseAdapter:
             emit_decl = FunctionDeclaration(name="emit_result", parameters=schema_obj)
             gen_config.tools = [Tool(google_search=GoogleSearch()), Tool(function_declarations=[emit_decl])]
             gen_config.tool_config = ToolConfig(function_calling_config=FunctionCallingConfig(mode="ANY", allowed_function_names=["emit_result"]))
-            metadata["web_tool_type"] = "google_search"
+            # Track web tool type consistently with OpenAI
+            metadata["web_tool_type_initial"] = "google_search"
+            metadata["web_tool_type_final"] = "google_search"  # Google doesn't negotiate
+            metadata["web_tool_type"] = "google_search"  # Backward compatibility
             metadata["schema_tool_present"] = True
         elif request.grounded:
             gen_config.tools = [Tool(google_search=GoogleSearch())]
-            metadata["web_tool_type"] = "google_search"
+            # Track web tool type consistently with OpenAI
+            metadata["web_tool_type_initial"] = "google_search"
+            metadata["web_tool_type_final"] = "google_search"  # Google doesn't negotiate
+            metadata["web_tool_type"] = "google_search"  # Backward compatibility
         elif json_schema_requested:
             gen_config.response_mime_type = "application/json"
             gen_config.response_schema = json_schema["schema"]
@@ -380,21 +398,35 @@ class GoogleBaseAdapter:
                     metadata["search_queries"] = queries[:10]
 
                 # Primary signal: any grounding_metadata chunks/queries
+                grounding_confidence = None
                 for cand in response.candidates or []:
                     gm = getattr(cand, "grounding_metadata", None)
                     if gm and (getattr(gm, "grounding_chunks", []) or getattr(gm, "search_queries", [])):
                         grounded_effective = True
                         tool_call_count = 1
+                        
+                        # Capture grounding confidence if SDK exposes it (for future ranking)
+                        if hasattr(gm, "grounding_confidence"):
+                            grounding_confidence = getattr(gm, "grounding_confidence", None)
+                        elif hasattr(gm, "confidence_score"):
+                            grounding_confidence = getattr(gm, "confidence_score", None)
+                        elif hasattr(gm, "retrieval_metadata"):
+                            rm = getattr(gm, "retrieval_metadata", None)
+                            if rm and hasattr(rm, "confidence"):
+                                grounding_confidence = getattr(rm, "confidence", None)
                         break
 
                 metadata["tool_call_count"] = tool_call_count
                 metadata["grounded_evidence_present"] = grounded_effective
+                
+                # Add grounding confidence if available for evidence quality ranking
+                if grounding_confidence is not None:
+                    metadata["grounding_confidence"] = grounding_confidence
 
+                # REQUIRED mode enforcement removed - now handled centrally in router
+                # Just report the facts for router to decide
                 if grounding_mode == "REQUIRED" and not grounded_effective:
                     metadata["why_not_grounded"] = "No GoogleSearch invoked despite REQUIRED mode"
-                    raise GroundingRequiredFailedError(
-                        f"REQUIRED grounding specified but no grounding evidence found. Tool calls: {tool_call_count}"
-                    )
             else:
                 metadata["anchored_citations_count"] = 0
                 metadata["unlinked_sources_count"] = 0
@@ -415,11 +447,51 @@ class GoogleBaseAdapter:
                     "total_token_count": getattr(um, "total_token_count", 0),
                 }
 
+            # Extract finish_reason - harmonized with OpenAI adapter
+            finish_reason = None
+            finish_reason_source = None
+            
             if getattr(response, "candidates", None):
                 for cand in response.candidates:
-                    if hasattr(cand, "finish_reason"):
-                        metadata["finish_reason"] = str(cand.finish_reason)
+                    if hasattr(cand, "finish_reason") and cand.finish_reason is not None:
+                        # Google SDK provides finish_reason as an enum/int
+                        # Common values: STOP (1), MAX_TOKENS (2), SAFETY (3), etc.
+                        raw_reason = cand.finish_reason
+                        finish_reason = str(raw_reason)
+                        finish_reason_source = "sdk_native"
+                        
+                        # Map Google enum values to readable strings
+                        if hasattr(raw_reason, "name"):
+                            finish_reason = raw_reason.name
+                        elif isinstance(raw_reason, int):
+                            # Map known integer values
+                            reason_map = {
+                                1: "STOP",
+                                2: "MAX_TOKENS", 
+                                3: "SAFETY",
+                                4: "RECITATION",
+                                5: "OTHER"
+                            }
+                            finish_reason = reason_map.get(raw_reason, f"CODE_{raw_reason}")
+                        
+                        metadata["finish_reason"] = finish_reason
+                        metadata["finish_reason_source"] = finish_reason_source
+                        
+                        # Standardized version is already in the right format for Google
+                        # but add it for consistency with OpenAI
+                        metadata["finish_reason_standardized"] = finish_reason
                         break
+            
+            # If no finish_reason found, try to infer
+            if finish_reason is None:
+                if content:
+                    metadata["finish_reason"] = "STOP"
+                    metadata["finish_reason_source"] = "inferred_from_content"
+                    metadata["finish_reason_standardized"] = "STOP"
+                else:
+                    metadata["finish_reason"] = "UNKNOWN"
+                    metadata["finish_reason_source"] = "no_signal"
+                    metadata["finish_reason_standardized"] = "UNKNOWN"
 
             latency_ms = int((time.perf_counter() - start) * 1000)
             metadata["latency_ms"] = latency_ms
@@ -439,8 +511,7 @@ class GoogleBaseAdapter:
                 citations=citations,
             )
 
-        except GroundingRequiredFailedError:
-            raise
+        # GroundingRequiredFailedError handling removed - router enforces REQUIRED
         except Exception as e:
             logger.error(f"[{self._vendor_key()}] API error: {str(e)[:200]}")
             raise

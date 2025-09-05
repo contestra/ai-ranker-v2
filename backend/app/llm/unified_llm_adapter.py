@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.llm.types import LLMRequest, LLMResponse, ALSContext
 from app.llm.models import validate_model, normalize_model
 from app.llm.tool_detection import normalize_tool_detection, attest_two_step_vertex
+from app.llm.als_config import ALSConfig
 from app.models.models import LLMTelemetry
 from app.services.als.als_builder import ALSBuilder
 from app.core.config import get_settings
@@ -132,7 +133,7 @@ class UnifiedLLMAdapter:
             
         elif vendor in ("gemini_direct", "vertex"):
             # Gemini 2.5 thinking-capable models
-            bare_model = self._bare_gemini_model(model)
+            bare_model = self._get_bare_model_name(model, vendor)
             if "2.5" in bare_model or "2-5" in bare_model:
                 if "flash" in bare_model.lower() or "pro" in bare_model.lower():
                     caps["supports_thinking_budget"] = True
@@ -144,13 +145,30 @@ class UnifiedLLMAdapter:
         
         return caps
     
-    def _bare_gemini_model(self, model: str) -> str:
-        """Extract bare model name from Gemini model path."""
-        if model.startswith("publishers/google/models/"):
-            model = model.split("publishers/google/models/", 1)[1]
-        if model.startswith("models/"):
-            model = model.split("models/", 1)[1]
-        return model
+    def _get_bare_model_name(self, model: str, vendor: str) -> str:
+        """Get bare model name using adapter's normalization logic.
+        
+        This delegates to the adapter's canonical logic instead of duplicating
+        string manipulation in the router. Returns just the model name without
+        prefixes like 'models/' or 'publishers/google/models/'.
+        """
+        if vendor == "gemini_direct":
+            # Gemini normalizes to models/gemini-x.x-yyy format
+            normalized = self.gemini_adapter._normalize_for_sdk(model)
+            # Strip the 'models/' prefix to get bare name
+            if normalized.startswith("models/"):
+                return normalized.split("models/", 1)[1]
+            return normalized
+        elif vendor == "vertex":
+            # Vertex normalizes to publishers/google/models/gemini-x.x-yyy format
+            normalized = self.vertex_adapter._normalize_for_validation(model)
+            # Strip the full prefix to get bare name
+            if normalized.startswith("publishers/google/models/"):
+                return normalized.split("publishers/google/models/", 1)[1]
+            return normalized
+        else:
+            # For other vendors, return as-is
+            return model
     
     def _check_circuit_breaker(self, vendor: str, model: str) -> tuple[str, Optional[str]]:
         """
@@ -334,19 +352,14 @@ class UnifiedLLMAdapter:
         # Normalize model
         request.model = normalize_model(request.vendor, request.model)
         
-        # Store original model in metadata for telemetry
+        # Initialize metadata for router internal state (NOT request.meta!)
+        # CONTRACT: request.metadata = router state, request.meta = user config
+        # See app/llm/request_contract.py for full documentation
         if not hasattr(request, 'metadata'):
             request.metadata = {}
         request.metadata['original_model'] = original_model_pre_norm
         
-        
-        def _bare_gemini_id(m: str) -> str:
-            if m.startswith("publishers/google/models/"):
-                m = m.split("publishers/google/models/", 1)[1]
-            if m.startswith("models/"):
-                m = m.split("models/", 1)[1]
-            return m
-# Hard guardrails for allowed models
+        # Hard guardrails for allowed models
         if request.vendor == "vertex":
             # Check against configurable allowlist
             allowed_models = os.getenv("ALLOWED_VERTEX_MODELS", 
@@ -478,7 +491,7 @@ class UnifiedLLMAdapter:
         
         # Step 3.8: Apply thinking defaults for Gemini-2.5-Pro
         if request.vendor in ("gemini_direct", "vertex"):
-            bare_model = self._bare_gemini_model(request.model)
+            bare_model = self._get_bare_model_name(request.model, request.vendor)
             if "gemini-2.5-pro" in bare_model.lower():
                 # Only apply if capability is supported
                 if caps.get("supports_thinking_budget", False):
@@ -561,12 +574,10 @@ class UnifiedLLMAdapter:
                         vertex_req = copy.deepcopy(request)
                         vertex_req.vendor = "vertex"
                         
-                        # Ensure model format is correct for Vertex
-                        if not vertex_req.model.startswith("publishers/google/models/"):
-                            bare_model = vertex_req.model.replace("models/", "").replace("gemini-", "")
-                            if "gemini" not in bare_model:
-                                bare_model = f"gemini-{bare_model}"
-                            vertex_req.model = f"publishers/google/models/{bare_model}"
+                        # Use Vertex adapter's normalization to ensure proper model format
+                        # This delegates to the adapter's canonical normalization logic
+                        # instead of fragile string surgery in the router
+                        vertex_req.model = self.vertex_adapter._normalize_for_validation(vertex_req.model)
                         
                         response = await self.vertex_adapter.complete(vertex_req, timeout=timeout)
                         self._record_success("vertex", vertex_req.model)
@@ -655,8 +666,18 @@ class UnifiedLLMAdapter:
             pass
         
         # Add capability gating telemetry
-        response.metadata['reasoning_hint_dropped'] = reasoning_hint_dropped
-        response.metadata['thinking_hint_dropped'] = thinking_hint_dropped
+        # Preserve adapter-level hint drops if they exist, otherwise use router-level
+        if 'reasoning_hint_dropped' not in response.metadata:
+            response.metadata['reasoning_hint_dropped'] = reasoning_hint_dropped
+        if 'thinking_hint_dropped' not in response.metadata:
+            response.metadata['thinking_hint_dropped'] = thinking_hint_dropped
+        
+        # If router dropped hints, add the reason
+        if reasoning_hint_dropped and 'reasoning_hint_drop_reason' not in response.metadata:
+            response.metadata['reasoning_hint_drop_reason'] = 'router_capability_gate'
+        if thinking_hint_dropped and 'thinking_hint_drop_reason' not in response.metadata:
+            response.metadata['thinking_hint_drop_reason'] = 'router_capability_gate'
+        
         response.metadata['circuit_breaker_status'] = cb_status
         
         # Add pacing metadata if it was applied
@@ -676,17 +697,32 @@ class UnifiedLLMAdapter:
             if hasattr(response, 'grounded_effective') and not response.grounded_effective:
                 # Relaxation for Google vendors if enabled
                 is_google_vendor = request.vendor in ("vertex", "gemini_direct")
+                is_openai_vendor = request.vendor == "openai"
                 tc = int((getattr(response, "metadata", {}) or {}).get("tool_call_count", 0) or 0)
                 m = response.metadata or {}
                 unlinked = int(m.get("unlinked_sources_count", (m.get("citation_count", 0) or 0) - (m.get("anchored_citations_count", 0) or 0)) or 0)
+                anchored = int(m.get("anchored_citations_count", 0) or 0)
+                
+                # Google vendors: can relax with unlinked + tool calls
                 if is_google_vendor and REQUIRED_RELAX_FOR_GOOGLE and tc > 0 and unlinked > 0:
                     grounding_failed = False
                     if response.metadata is None:
                         response.metadata = {}
                     response.metadata["required_pass_reason"] = response.metadata.get("required_pass_reason") or "unlinked_google"
+                # OpenAI: requires both tool calls AND citations (anchored or unlinked)
+                elif is_openai_vendor and tc > 0 and (anchored > 0 or unlinked > 0):
+                    grounding_failed = False
+                    if response.metadata is None:
+                        response.metadata = {}
+                    response.metadata["required_pass_reason"] = "openai_tools_and_citations"
                 else:
                     grounding_failed = True
-                    failure_reason = "Model did not invoke grounding tools"
+                    if tc == 0:
+                        failure_reason = "Model did not invoke grounding tools"
+                    elif is_openai_vendor and anchored == 0 and unlinked == 0:
+                        failure_reason = f"OpenAI REQUIRED mode needs tool calls ({tc} made) AND citations (0 found)"
+                    else:
+                        failure_reason = "Grounding requirements not met"
             
             # Check for ANCHORED citations (unlinked-only is insufficient for REQUIRED by default)
             elif hasattr(response, 'citations'):
@@ -761,25 +797,6 @@ class UnifiedLLMAdapter:
         
         return response
     
-
-def get_vendor_for_model(self, model: str) -> Optional[str]:
-    """
-    Infer vendor from model name (supports fully-qualified Vertex IDs).
-    Returns "openai" | "vertex" | None.
-    Note: "gemini_direct" is a routing flag; vendor remains "vertex".
-    """
-    if not model:
-        return None
-    m = str(model)
-    ml = m.lower()
-    # OpenAI models
-    if ml.startswith("gpt-5") or m in ("gpt-5-chat-latest", "gpt-4o"):
-        return "openai"
-    # Vertex/Gemini models
-    if "publishers/google/models/gemini-" in m or ml.startswith("gemini-") or ml.startswith("models/gemini-"):
-        return "vertex"
-    return None
-
     def _apply_als(self, request: LLMRequest) -> LLMRequest:
         """
         Apply Ambient Location Signals to the request
@@ -812,8 +829,8 @@ def get_vendor_for_model(self, model: str) -> Optional[str]:
         
         # Step 2: Deterministic variant selection using HMAC
         import hmac
-        # Use a stable seed key and template identifier
-        seed_key_id = 'v1_2025'  # This should come from config in production
+        # Get seed key from centralized config
+        seed_key_id = ALSConfig.get_seed_key_id()
         template_id = f'als_template_{country_code}'  # Stable template identifier
         
         # Generate deterministic seed using HMAC
@@ -922,7 +939,25 @@ def get_vendor_for_model(self, model: str) -> Optional[str]:
             'als_template_id': template_id  # Template identifier
         })
         
+        # Mark ALS provenance in metadata
+        ALSConfig.mark_als_metadata(request.metadata, seed_key_id)
+        
         return request
+    
+    def _extract_grounding_mode(self, request: LLMRequest) -> str:
+        """Extract the grounding mode from the request.
+        
+        Returns: "REQUIRED" | "AUTO" | None
+        """
+        if not request.grounded:
+            return None
+        
+        # Check meta field for explicit grounding_mode
+        if hasattr(request, 'meta') and request.meta:
+            mode = request.meta.get('grounding_mode', 'AUTO')
+            return mode.upper() if isinstance(mode, str) else 'AUTO'
+        
+        return 'AUTO'
     
     async def _emit_telemetry(
         self,
@@ -972,8 +1007,8 @@ def get_vendor_for_model(self, model: str) -> Optional[str]:
         # if request.vendor == "gemini_direct" or (request.vendor == "vertex" and USE_GEMINI_DIRECT and is_gemini_model):
             # allowed_direct_csv = os.getenv("ALLOWED_GEMINI_DIRECT_MODELS", "")
             # if allowed_direct_csv.strip():
-                # allowed_direct = { _bare_gemini_id(x.strip()) for x in allowed_direct_csv.split(",") if x.strip() }
-                # if _bare_gemini_id(request.model) not in allowed_direct:
+                # allowed_direct = { self._get_bare_model_name(x.strip(), "gemini_direct") for x in allowed_direct_csv.split(",") if x.strip() }
+                # if self._get_bare_model_name(request.model, "gemini_direct") not in allowed_direct:
                     # raise ValueError(
                         # f"Model not allowed for direct Gemini: {request.model}. "
                         # f"Allowed (direct): {sorted(allowed_direct)}"

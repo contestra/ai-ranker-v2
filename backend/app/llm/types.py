@@ -19,7 +19,18 @@ class VantagePolicy(str, Enum):
 
 @dataclass
 class LLMRequest:
-    """Unified request format for all LLM providers"""
+    """Unified request format for all LLM providers
+    
+    IMPORTANT CONTRACT - Meta vs Metadata:
+    ======================================
+    This class uses 'meta' for user configuration, while 'metadata' (added dynamically)
+    is for router internal state. DO NOT CONFUSE THEM!
+    
+    request.meta: User-provided tuning knobs (grounding_mode, json_schema, reasoning_effort)
+    request.metadata: Router-computed state (capabilities, thinking_budget_tokens, als_*)
+    
+    See app/llm/request_contract.py for full documentation and helper methods.
+    """
     vendor: str                        # "openai" | "vertex"
     model: str                         # e.g., "gpt-4o", "gemini-1.5-pro"
     messages: List[Dict[str, str]]     # Message array
@@ -35,7 +46,11 @@ class LLMRequest:
     # Vantage policy for proxy/ALS control
     vantage_policy: Optional[VantagePolicy] = None
     country_code: Optional[str] = None  # ISO country code (e.g., "US", "DE", "GB")
-    meta: Optional[Dict[str, Any]] = None  # Additional metadata for proxy config
+    
+    # USER CONFIGURATION (set by API caller, read by adapters)
+    # Fields: grounding_mode, json_schema, reasoning_effort, reasoning_summary,
+    #         thinking_budget, include_thoughts
+    meta: Optional[Dict[str, Any]] = None  # User tuning knobs - DO NOT MODIFY in router/adapters!
     
     # Template tracking
     template_id: Optional[str] = None
@@ -88,4 +103,4 @@ class ALSContext:
     country_code: str              # e.g., "US", "DE"
     als_block: str                 # The formatted ALS text block
     als_variant_id: Optional[str] = None
-    seed_key_id: str = "k1"
+    seed_key_id: Optional[str] = None  # Will be set by router using ALSConfig
