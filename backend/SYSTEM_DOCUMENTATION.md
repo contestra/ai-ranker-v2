@@ -45,8 +45,12 @@ else:
 ```
 
 ### 3. Grounding Support
-- **OpenAI**: Native grounding with synthesis fallback
+- **OpenAI**: Responses API with web_search tools + deterministic fallback chain
+  - Provoker retry for empty responses (flag: `OPENAI_PROVOKER_ENABLED`)
+  - Two-step synthesis fallback (flag: `OPENAI_GROUNDED_TWO_STEP`)
+  - Strict REQUIRED mode: must have tool calls AND citations
 - **Vertex**: GenAI SDK for grounded, SDK env proxy for ungrounded+proxy
+- **Citations**: Normalized schema with deduplication
 - Automatic fallback for empty grounded responses
 
 ### 4. Rate Limiting & SLA Protection
@@ -250,6 +254,12 @@ OPENAI_MAX_CONCURRENCY=3
 VERTEX_MAX_CONCURRENCY=4
 STAGGER_DELAY_SECONDS=15
 SLA_TIMEOUT_SECONDS=480
+
+# OpenAI Grounding Features
+OPENAI_PROVOKER_ENABLED=true          # Enable provoker retry
+OPENAI_GROUNDED_TWO_STEP=false        # Enable two-step synthesis (set true in prod)
+OPENAI_GROUNDED_MAX_EVIDENCE=5        # Max citations in evidence list
+OPENAI_GROUNDED_MAX_TOKENS=6000       # Max tokens for grounded requests
 ```
 
 ### Critical Constants (Never Change)
@@ -265,9 +275,13 @@ VERTEX_MODEL = "gemini-2.5-pro"  # Only
 ### Common Issues
 
 #### Empty OpenAI Grounded Responses
-- **Cause**: Grounding returns tool calls but no message
-- **Fix**: Automatic synthesis fallback implemented
-- **Logs**: Look for "synthesis_step_used" in metadata
+- **Cause**: Responses API returns tool calls but no final synthesis
+- **Fix**: Three-stage fallback chain:
+  1. Initial request with web_search tools
+  2. Provoker retry (adds synthesis prompt)
+  3. Two-step fallback (synthesis without tools using evidence list)
+- **Enable in Production**: `export OPENAI_GROUNDED_TWO_STEP=true`
+- **Telemetry**: Check `provoker_retry_used` and `synthesis_step_used` in metadata
 
 #### Vertex Auth Failures
 - **Error**: "Reauthentication is needed"
