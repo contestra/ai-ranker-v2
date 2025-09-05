@@ -118,7 +118,7 @@ def _extract_citations_from_grounding(response) -> Tuple[List[Dict[str, Any]], i
             continue
             
         # Extract grounding_chunks (web search results) - these are unlinked
-        grounding_chunks = getattr(grounding_metadata, "grounding_chunks", [])
+        grounding_chunks = getattr(grounding_metadata, "grounding_chunks", []) or []
         for chunk in grounding_chunks:
             web = getattr(chunk, "web", None)
             if web:
@@ -135,7 +135,7 @@ def _extract_citations_from_grounding(response) -> Tuple[List[Dict[str, Any]], i
                     unlinked_count += 1  # Grounding chunks are unlinked evidence
         
         # Extract search_queries (what was searched) - these are also unlinked
-        search_queries = getattr(grounding_metadata, "search_queries", [])
+        search_queries = getattr(grounding_metadata, "search_queries", []) or []
         for query in search_queries:
             citations.append({
                 "query": query,
@@ -398,20 +398,16 @@ class GeminiAdapter:
                 metadata["anchored_citations_count"] = anchored_count
                 metadata["unlinked_sources_count"] = unlinked_count
                 
-                # Check for GoogleSearch invocation
-                if func_name == "google_search":
-                    tool_call_count = 1
-                    grounded_effective = True
-                
-                # Also check grounding metadata
-                if not grounded_effective:
-                    for cand in response.candidates or []:
-                        if getattr(cand, "grounding_metadata", None):
-                            chunks = getattr(cand.grounding_metadata, "grounding_chunks", [])
-                            if chunks:
-                                tool_call_count = 1
-                                grounded_effective = True
-                                break
+                # Primary signal for Google grounding: grounding_metadata
+                for cand in response.candidates or []:
+                    grounding_meta = getattr(cand, "grounding_metadata", None)
+                    if grounding_meta:
+                        chunks = getattr(grounding_meta, "grounding_chunks", []) or []
+                        queries = getattr(grounding_meta, "search_queries", []) or []
+                        if chunks or queries:
+                            tool_call_count = 1
+                            grounded_effective = True
+                            break
                 
                 metadata["tool_call_count"] = tool_call_count
                 metadata["grounded_evidence_present"] = grounded_effective

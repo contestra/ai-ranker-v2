@@ -118,6 +118,8 @@ class OpenAIAdapter:
             
             # Tool choice for grounding mode
             # Note: web_search only supports "auto" tool_choice
+            # NOTE: web_search only supports tool_choice="auto".
+            # REQUIRED grounding is enforced post-response (tool_call_count+citations).
             payload["tool_choice"] = "auto"
             
             # Add text format to ensure final synthesis

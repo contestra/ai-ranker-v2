@@ -536,6 +536,7 @@ class UnifiedLLMAdapter:
                 )
             ):
                 try:
+                    vendor_path.append("gemini_direct")
                     response = await self.gemini_adapter.complete(request, timeout=timeout)
                     self._record_success("gemini_direct", request.model)
                 except Exception as e:
@@ -545,10 +546,11 @@ class UnifiedLLMAdapter:
                     
                     error_str = str(e)
                     # Check if it's a circuit breaker open error and failover is enabled
+                    transient = self._is_transient_error('gemini_direct', e)
                     if (
-                        GEMINI_DIRECT_FAILOVER_TO_VERTEX 
-                        and "Circuit breaker open" in error_str
-                        and request.vendor == "gemini_direct"
+                        GEMINI_DIRECT_FAILOVER_TO_VERTEX
+                        and (vendor_path and vendor_path[-1] == 'gemini_direct')
+                        and ("Circuit breaker open" in error_str or transient)
                     ):
                         # Attempt failover to Vertex
                         logger.info(f"[FAILOVER] Attempting failover from gemini_direct to vertex due to circuit breaker")
@@ -605,14 +607,7 @@ class UnifiedLLMAdapter:
             
             # ---- FAIL-CLOSED for Required grounding per PRD ----
             # If the caller requested REQUIRED grounding, we must not swallow grounding errors.
-            grounding_mode = None
-            try:
-                if hasattr(request, "meta") and isinstance(request.meta, dict):
-                    grounding_mode = request.meta.get("grounding_mode")
-                else:
-                    grounding_mode = getattr(request, "grounding_mode", None)
-            except Exception:
-                grounding_mode = None
+            grounding_mode = self._extract_grounding_mode(request)
             
             # Known grounding failure types to bubble up
             _fatal_markers = (
@@ -654,6 +649,12 @@ class UnifiedLLMAdapter:
         # Add router-level metadata to response
         if not hasattr(response, 'metadata'):
             response.metadata = {}
+        # Track the actual adapters used
+        try:
+            if isinstance(response.metadata, dict):
+                response.metadata.setdefault('vendor_path', vendor_path)
+        except Exception:
+            pass
         
         # Add capability gating telemetry
         response.metadata['reasoning_hint_dropped'] = reasoning_hint_dropped
@@ -666,14 +667,7 @@ class UnifiedLLMAdapter:
         
         # Post-validation for REQUIRED mode - enforce grounding requirement
         # This provides uniform enforcement across all providers, especially those that can't force tools
-        grounding_mode = None
-        try:
-            if hasattr(request, "meta") and isinstance(request.meta, dict):
-                grounding_mode = request.meta.get("grounding_mode")
-            else:
-                grounding_mode = getattr(request, "grounding_mode", None)
-        except Exception:
-            grounding_mode = None
+        grounding_mode = self._extract_grounding_mode(request)
         
         if grounding_mode == "REQUIRED" and request.grounded:
             # Check if grounding was effective and citations were extracted
@@ -932,7 +926,7 @@ class UnifiedLLMAdapter:
                 'als_nfc_length': request.metadata.get('als_nfc_length') if hasattr(request, 'metadata') else None,
                 
                 # Grounding fields - report actual requested mode
-                'grounding_mode_requested': (getattr(request, 'grounding_mode', None) or ('AUTO' if getattr(request, 'grounded', False) else 'NONE')),
+                'grounding_mode_requested': self._extract_grounding_mode(request),
                 'grounded_effective': response.grounded_effective,
                 'tool_call_count': response.metadata.get('tool_call_count', 0) if hasattr(response, 'metadata') else 0,
                 'why_not_grounded': response.metadata.get('why_not_grounded') if hasattr(response, 'metadata') else None,
@@ -1008,8 +1002,10 @@ class UnifiedLLMAdapter:
             
             # Cheap derived metric for dashboards - citations count
             try:
-                c = response.metadata.get('citations') if hasattr(response, 'metadata') else None
-                meta_json['citations_count'] = len(c) if isinstance(c, list) else 0
+                try:
+                meta_json['citations_count'] = len(response.citations) if hasattr(response, 'citations') and isinstance(response.citations, list) else 0
+            except Exception:
+                meta_json['citations_count'] = 0
             except Exception:
                 meta_json['citations_count'] = 0
             
@@ -1070,6 +1066,19 @@ class UnifiedLLMAdapter:
         """
         if not model:
             return None
+
+
+def _extract_grounding_mode(self, request: LLMRequest) -> str:
+    """Standardized grounding_mode extraction per PRD: request.meta['grounding_mode'] when present;
+    default 'AUTO' if grounded, else 'NONE'."""
+    try:
+        if getattr(request, 'grounded', False):
+            if hasattr(request, 'meta') and isinstance(request.meta, dict):
+                return request.meta.get('grounding_mode', 'AUTO')
+            return 'AUTO'
+        return 'NONE'
+    except Exception:
+        return 'NONE'
             
         # OpenAI models - recognize any gpt-5 variant or gpt-4o
         if model.startswith("gpt-5") or model in ["gpt-5-chat-latest", "gpt-4o"]:
