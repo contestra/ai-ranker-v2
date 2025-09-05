@@ -133,17 +133,11 @@ def _extract_citations_from_grounding(response) -> Tuple[List[Dict[str, Any]], i
                         "domain": _get_registrable_domain(final_url)
                     })
                     unlinked_count += 1  # Grounding chunks are unlinked evidence
-        
-        # Extract search_queries (what was searched) - these are also unlinked
-        search_queries = getattr(grounding_metadata, "search_queries", []) or []
-        for query in search_queries:
-            citations.append({
-                "query": query,
-                "source_type": "search_query"
-            })
-            # Don't count queries toward unlinked_count as they're not sources
-    
-    return citations, anchored_count, unlinked_count
+            # Extract search_queries (kept separate; NOT counted as citations)
+            search_queries = getattr(grounding_metadata, "search_queries", []) or []
+            # NOTE: We intentionally do NOT append queries into `citations`.
+            # They will be exposed via adapter metadata as `search_queries`.
+return citations, anchored_count, unlinked_count
 
 
 def _detect_als_position(messages: List[Dict[str, str]], als_country: Optional[str]) -> int:
@@ -410,6 +404,29 @@ class GeminiAdapter:
                             break
                 
                 metadata["tool_call_count"] = tool_call_count
+
+# Capture search queries into metadata (separate from citations)
+try:
+    _queries_accum = []
+    for cand2 in response.candidates or []:
+        gm2 = getattr(cand2, "grounding_metadata", None)
+        if gm2:
+            _qs = getattr(gm2, "search_queries", []) or []
+            if _qs:
+                for _q in _qs:
+                    if isinstance(_q, str):
+                        _queries_accum.append(_q)
+    if _queries_accum:
+        # De-duplicate while preserving order
+        seen = set()
+        _uniq = []
+        for q in _queries_accum:
+            if q not in seen:
+                _uniq.append(q); seen.add(q)
+        metadata["search_queries"] = _uniq[:10]
+except Exception:
+    pass
+
                 metadata["grounded_evidence_present"] = grounded_effective
                 
                 # REQUIRED mode enforcement

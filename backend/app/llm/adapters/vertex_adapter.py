@@ -343,6 +343,29 @@ class VertexAdapter:
                             break
 
                 metadata["tool_call_count"] = tool_call_count
+
+# Capture search queries into metadata (separate from citations)
+try:
+    _queries_accum = []
+    for cand2 in response.candidates or []:
+        gm2 = getattr(cand2, "grounding_metadata", None)
+        if gm2:
+            _qs = getattr(gm2, "search_queries", []) or []
+            if _qs:
+                for _q in _qs:
+                    if isinstance(_q, str):
+                        _queries_accum.append(_q)
+    if _queries_accum:
+        # De-duplicate while preserving order
+        seen = set()
+        _uniq = []
+        for q in _queries_accum:
+            if q not in seen:
+                _uniq.append(q); seen.add(q)
+        metadata["search_queries"] = _uniq[:10]
+except Exception:
+    pass
+
                 metadata["grounded_evidence_present"] = grounded_effective
 
                 if grounding_mode == "REQUIRED" and not grounded_effective:

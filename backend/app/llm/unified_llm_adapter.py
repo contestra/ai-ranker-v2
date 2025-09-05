@@ -763,6 +763,25 @@ class UnifiedLLMAdapter:
         
         return response
     
+
+def get_vendor_for_model(self, model: str) -> Optional[str]:
+    """
+    Infer vendor from model name (supports fully-qualified Vertex IDs).
+    Returns "openai" | "vertex" | None.
+    Note: "gemini_direct" is a routing flag; vendor remains "vertex".
+    """
+    if not model:
+        return None
+    m = str(model)
+    ml = m.lower()
+    # OpenAI models
+    if ml.startswith("gpt-5") or m in ("gpt-5-chat-latest", "gpt-4o"):
+        return "openai"
+    # Vertex/Gemini models
+    if "publishers/google/models/gemini-" in m or ml.startswith("gemini-") or ml.startswith("models/gemini-"):
+        return "vertex"
+    return None
+
     def _apply_als(self, request: LLMRequest) -> LLMRequest:
         """
         Apply Ambient Location Signals to the request
@@ -1002,10 +1021,7 @@ class UnifiedLLMAdapter:
             
             # Cheap derived metric for dashboards - citations count
             try:
-                try:
                 meta_json['citations_count'] = len(response.citations) if hasattr(response, 'citations') and isinstance(response.citations, list) else 0
-            except Exception:
-                meta_json['citations_count'] = 0
             except Exception:
                 meta_json['citations_count'] = 0
             
@@ -1066,28 +1082,3 @@ class UnifiedLLMAdapter:
         """
         if not model:
             return None
-
-
-def _extract_grounding_mode(self, request: LLMRequest) -> str:
-    """Standardized grounding_mode extraction per PRD: request.meta['grounding_mode'] when present;
-    default 'AUTO' if grounded, else 'NONE'."""
-    try:
-        if getattr(request, 'grounded', False):
-            if hasattr(request, 'meta') and isinstance(request.meta, dict):
-                return request.meta.get('grounding_mode', 'AUTO')
-            return 'AUTO'
-        return 'NONE'
-    except Exception:
-        return 'NONE'
-            
-        # OpenAI models - recognize any gpt-5 variant or gpt-4o
-        if model.startswith("gpt-5") or model in ["gpt-5-chat-latest", "gpt-4o"]:
-            return "openai"
-            
-        # Vertex (Gemini) - support both shorthand and fully-qualified
-        if "publishers/google/models/gemini-" in model:
-            return "vertex"
-        if model.startswith("gemini-"):
-            return "vertex"
-            
-        return None  # Unsupported model
