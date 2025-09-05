@@ -416,6 +416,7 @@ class OpenAIAdapter:
             anchored_count = 0
             unlinked_count = 0
             if is_grounded:
+                metadata["why_not_grounded"] = None  # Grounded was requested
                 content, source = self._extract_content(response, is_grounded=True)
                 metadata["fallback_used"] = False
                 # Extract citations from web search results
@@ -530,6 +531,7 @@ class OpenAIAdapter:
                 metadata["synthesis_step_used"] = False
                 metadata["synthesis_tool_count"] = 0
                 metadata["synthesis_evidence_count"] = 0
+                metadata["why_not_grounded"] = "not_requested"  # User didn't request grounding
             
             metadata["text_source"] = source
             

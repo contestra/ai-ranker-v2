@@ -80,9 +80,16 @@ curl -s http://localhost:8000/health/proxy | jq '.mode_guess'
 - WIF for production, ADC for development
 - All secrets in `.env` (gitignored)
 
-## 🔧 OpenAI Grounding Configuration
+## 🔧 Grounding Configuration
 
-### Overview
+### Provider Comparison
+
+| Provider | Method | Challenges | Solution |
+|----------|--------|------------|----------|
+| **OpenAI** | Responses API with `web_search` tools | Sometimes returns searches without synthesis | Three-stage fallback chain |
+| **Vertex/Gemini** | GoogleSearch tool with Forced Function Calling | Requires explicit tool config | Auto-configured per model capabilities |
+
+### OpenAI Grounding Details
 OpenAI grounded mode uses the Responses API with `web_search` tools. Due to API limitations where the model sometimes returns web search results without synthesizing a final answer, the adapter implements a deterministic fallback chain.
 
 ### Fallback Chain
@@ -137,6 +144,13 @@ export OPENAI_GROUNDED_TWO_STEP=true  # Enable synthesis fallback
 export OPENAI_GROUNDED_MAX_TOKENS=6000  # Sufficient budget
 export OPENAI_GROUNDED_MAX_EVIDENCE=5  # Balanced evidence list
 ```
+
+### Determinism Guarantees
+
+The adapter ensures deterministic grounded responses:
+- **OpenAI**: Even when the Responses API fails to synthesize, our fallback chain guarantees a final answer
+- **Vertex/Gemini**: Forced Function Calling ensures GoogleSearch is always invoked when grounding is requested
+- **REQUIRED Mode**: Strict fail-closed enforcement - both providers must show evidence of grounding or the request fails
 
 ---
 **Version**: 2.7.1 | **Status**: Production Ready | **Updated**: 2025-09-05

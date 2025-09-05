@@ -4,7 +4,9 @@
       "Bash(git add:*)",
       "Bash(git commit:*)",
       "Bash(python3:*)",
-      "Bash(timeout 60 python3 test_openai_citations_real.py)"
+      "Bash(timeout 60 python3 test_openai_citations_real.py)",
+      "Bash(git push:*)",
+      "Bash(grep:*)"
     ],
     "deny": [],
     "ask": [],
