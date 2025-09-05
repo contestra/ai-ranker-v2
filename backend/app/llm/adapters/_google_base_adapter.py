@@ -338,6 +338,19 @@ class GoogleBaseAdapter:
             metadata["json_mode_active"] = True
 
         # Call SDK
+        # Debug logging
+        logger.debug(f"[{self._vendor_key()}] Calling generate_content with:")
+        logger.debug(f"  - model_for_sdk: {model_for_sdk}")
+        logger.debug(f"  - grounded: {request.grounded}")
+        logger.debug(f"  - tools present: {hasattr(gen_config, 'tools') and gen_config.tools is not None}")
+        if hasattr(gen_config, 'tools') and gen_config.tools:
+            logger.debug(f"  - tools count: {len(gen_config.tools)}")
+            for i, tool in enumerate(gen_config.tools):
+                if hasattr(tool, 'google_search'):
+                    logger.debug(f"  - tool[{i}]: GoogleSearch")
+                elif hasattr(tool, 'function_declarations'):
+                    logger.debug(f"  - tool[{i}]: Functions")
+        
         try:
             response = await self.client.aio.models.generate_content(
                 model=model_for_sdk,

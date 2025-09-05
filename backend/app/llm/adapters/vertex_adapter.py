@@ -34,7 +34,7 @@ class VertexAdapter(GoogleBaseAdapter):
         return f"publishers/google/models/{m}"
 
     def _normalize_for_sdk(self, model: str) -> str:
-        # Vertex expects the full publishers path
+        # Vertex requires the full publishers path
         return self._normalize_for_validation(model)
 
     def _region(self) -> Optional[str]:
