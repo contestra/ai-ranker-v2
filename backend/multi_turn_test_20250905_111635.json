@@ -1,0 +1,23 @@
+[
+  {
+    "adapter": "openai/gpt-5-2025-08-07",
+    "success": true,
+    "elapsed": 3.779738,
+    "content_length": 860,
+    "context_aware": true,
+    "response_preview": "General guidance for vitamin D (vitamin D3 is typically preferred):\n\n- Infants 0\u201312 months: 400 IU (10 mcg) daily\n- Children 1\u201318 years: 600\u20131,000 IU (15\u201325 mcg) daily\n- Adults 19\u201370 years: 600\u20132,000 "
+  },
+  {
+    "adapter": "gemini_direct/gemini-1.5-pro",
+    "success": true,
+    "elapsed": 3.375539,
+    "content_length": 698,
+    "context_aware": true,
+    "response_preview": "I cannot give specific medical advice or dosage recommendations.  Since we've discussed bone health, immune support, mood regulation, and heart health, these are all areas where vitamin D can play a r"
+  },
+  {
+    "adapter": "vertex/gemini-1.5-pro",
+    "success": false,
+    "error": "Model not allowed: publishers/google/models/gemini-1.5-pro\nAllowed models: ['publishers/google/models/gemini-2.5-pro', 'publishers/google/models/gemini-2.0-flash', 'gemini-2.5-pro', 'gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash', 'gemini-2.0-flash-exp']\nTo use this model:\n1. Add to ALLOWED_VERTEX_MODELS env var\n2. Redeploy service\nNote: We don't silently rewrite models (Adapter PRD)"
+  }
+]

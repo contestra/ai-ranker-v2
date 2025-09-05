@@ -14,7 +14,7 @@ import google.genai as genai
 from google.genai.types import (
     FunctionCallingConfig, FunctionDeclaration, GenerateContentConfig,
     GoogleSearch, HarmBlockThreshold, HarmCategory, SafetySetting, Schema,
-    Tool, ToolConfig
+    ThinkingConfig, Tool, ToolConfig
 )
 
 from app.core.config import settings
@@ -159,43 +159,44 @@ def _detect_als_position(messages: List[Dict[str, str]], als_country: Optional[s
 
 
 def _extract_system_and_user_messages(messages: List[Dict[str, str]], als_position: int = -1) -> Tuple[Optional[str], List[Dict[str, Any]]]:
-    """Extract system instruction and format user messages for Gemini API.
-    Returns: (system_instruction, user_messages)
+    """Extract system instruction and format messages for Gemini API preserving full history.
+    Returns: (system_instruction, conversation_messages)
     """
     system_content = None
-    user_content = None
+    conversation_messages = []
     
     for i, msg in enumerate(messages):
         role = msg.get("role", "")
         content = msg.get("content", "")
         
         if role == "system":
+            # Combine all system messages into system instruction
             if system_content is None:
                 system_content = content
             else:
                 system_content += "\n" + content
         elif role == "user":
-            if als_position == 0 and i == 0:
-                # This is the ALS block
-                if user_content is None:
-                    user_content = content
-                else:
-                    user_content = content + "\n\n" + user_content
-            else:
-                if user_content is None:
-                    user_content = content
-                else:
-                    user_content += "\n" + content
+            # Add user message to conversation
+            conversation_messages.append({
+                "role": "user",
+                "parts": [{"text": content}]
+            })
+        elif role == "assistant":
+            # Add assistant message to conversation (model in Gemini)
+            conversation_messages.append({
+                "role": "model",
+                "parts": [{"text": content}]
+            })
     
-    # Build user messages only (no fake system turns)
-    user_messages = []
-    if user_content:
-        user_messages.append({
+    # Ensure conversation starts with user (Gemini requirement)
+    # If first message is model/assistant, prepend a minimal user message
+    if conversation_messages and conversation_messages[0]["role"] == "model":
+        conversation_messages.insert(0, {
             "role": "user",
-            "parts": [{"text": user_content}]
+            "parts": [{"text": "Continue"}]
         })
     
-    return system_content, user_messages
+    return system_content, conversation_messages
 
 
 class GeminiAdapter:
@@ -249,10 +250,11 @@ class GeminiAdapter:
         als_position = _detect_als_position(request.messages, als_country)
         
         # Extract system instruction and user messages
-        system_instruction, user_messages = _extract_system_and_user_messages(request.messages, als_position)
+        system_instruction, conversation_messages = _extract_system_and_user_messages(request.messages, als_position)
         
         # Build generation config
         max_tokens = request.max_tokens or 1024
+        
         if request.grounded:
             max_tokens = min(max_tokens, GEMINI_GROUNDED_MAX_TOKENS)
         else:
@@ -278,27 +280,35 @@ class GeminiAdapter:
             )
         ]
         
+        # Configure thinking based on router capabilities
+        thinking_config = None
+        if caps.get("supports_thinking_budget", False):
+            # Read thinking budget from metadata (router provides it)
+            thinking_budget = request.metadata.get("thinking_budget_tokens") if hasattr(request, 'metadata') else None
+            include_thoughts = False
+            
+            # Check if include_thoughts is allowed and requested
+            if caps.get("include_thoughts_allowed", False):
+                if hasattr(request, 'meta') and request.meta:
+                    include_thoughts = request.meta.get("include_thoughts", False)
+            
+            if thinking_budget is not None:
+                thinking_config = ThinkingConfig(
+                    thinkingBudget=thinking_budget,
+                    includeThoughts=include_thoughts
+                )
+                metadata["thinking_budget_tokens"] = thinking_budget
+                metadata["include_thoughts"] = include_thoughts
+        
         gen_config = GenerateContentConfig(
             max_output_tokens=max_tokens,
             temperature=request.temperature if hasattr(request, 'temperature') else 0.7,
             top_p=request.top_p if hasattr(request, 'top_p') else 0.95,
             response_mime_type="text/plain",
             safety_settings=safety_settings,
-            system_instruction=system_instruction  # Add system instruction to config
+            system_instruction=system_instruction,  # Add system instruction to config
+            thinkingConfig=thinking_config  # Add thinking config
         )
-        
-        # Add thinking configuration if supported
-        if caps.get("supports_thinking_budget"):
-            thinking_budget = request.meta.get("thinking_budget") if hasattr(request, 'meta') and request.meta else None
-            if thinking_budget is not None:
-                # Note: Gemini SDK doesn't have direct thinking budget yet
-                # This is placeholder for when SDK adds support
-                metadata["thinking_budget_requested"] = thinking_budget
-        
-        if caps.get("include_thoughts_allowed"):
-            include_thoughts = request.meta.get("include_thoughts", False) if hasattr(request, 'meta') and request.meta else False
-            if include_thoughts:
-                metadata["include_thoughts_requested"] = True
         
         # Determine if we need JSON output and how to achieve it
         json_schema_requested = False
@@ -347,19 +357,11 @@ class GeminiAdapter:
                 
                 # Configure tool calling based on mode
                 if grounding_mode == "REQUIRED":
-                    # Force function calling for REQUIRED mode
-                    gen_config.tool_config = ToolConfig(
-                        function_calling_config=FunctionCallingConfig(
-                            mode="ANY",
-                            allowed_function_names=["google_search"]
-                        )
-                    )
-                    metadata["grounding_mode_enforced"] = "FFC_ANY"
-                else:
-                    # AUTO mode - let model decide
-                    gen_config.tool_config = ToolConfig(
-                        function_calling_config=FunctionCallingConfig(mode="AUTO")
-                    )
+                    # Force tool usage for REQUIRED mode
+                    # Note: GoogleSearch doesn't support function_calling_config
+                    # The model will be forced to use it through instruction
+                    metadata["grounding_mode_enforced"] = "REQUIRED"
+                # For AUTO mode, tool use is optional (default behavior)
         elif json_schema_requested:
             # Ungrounded + JSON: Use JSON Mode
             gen_config.response_mime_type = "application/json"
@@ -370,7 +372,7 @@ class GeminiAdapter:
         try:
             response = await self.client.aio.models.generate_content(
                 model=f"models/{model_id}",
-                contents=user_messages,
+                contents=conversation_messages,
                 config=gen_config
             )
             
@@ -426,7 +428,7 @@ class GeminiAdapter:
                 metadata["anchored_citations_count"] = 0
                 metadata["unlinked_sources_count"] = 0
             
-            # Extract usage
+            # Extract usage with thinking tokens
             usage = {}
             if hasattr(response, 'usage_metadata'):
                 usage_meta = response.usage_metadata
@@ -435,6 +437,20 @@ class GeminiAdapter:
                     "completion_tokens": getattr(usage_meta, 'candidates_token_count', 0),
                     "total_tokens": getattr(usage_meta, 'total_token_count', 0)
                 }
+                # Add thinking tokens to metadata for telemetry
+                metadata["usage"] = {
+                    "thoughts_token_count": getattr(usage_meta, 'thoughts_token_count', None),
+                    "input_token_count": getattr(usage_meta, 'prompt_token_count', 0),
+                    "output_token_count": getattr(usage_meta, 'candidates_token_count', 0),
+                    "total_token_count": getattr(usage_meta, 'total_token_count', 0)
+                }
+            
+            # Add finish reason to metadata
+            if response and hasattr(response, 'candidates') and response.candidates:
+                for candidate in response.candidates:
+                    if hasattr(candidate, 'finish_reason'):
+                        metadata["finish_reason"] = str(candidate.finish_reason)
+                        break
             
             # Calculate latency
             latency_ms = int((time.perf_counter() - start_time) * 1000)

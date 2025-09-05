@@ -1,0 +1,26 @@
+[
+  {
+    "adapter": "openai/gpt-5-2025-08-07",
+    "success": true,
+    "elapsed": 0.000181,
+    "content_length": 0,
+    "context_aware": false,
+    "response_preview": ""
+  },
+  {
+    "adapter": "gemini_direct/gemini-2.5-pro",
+    "success": true,
+    "elapsed": 0.003386,
+    "content_length": 0,
+    "context_aware": false,
+    "response_preview": ""
+  },
+  {
+    "adapter": "vertex/gemini-2.5-pro",
+    "success": true,
+    "elapsed": 0.000143,
+    "content_length": 0,
+    "context_aware": false,
+    "response_preview": ""
+  }
+]

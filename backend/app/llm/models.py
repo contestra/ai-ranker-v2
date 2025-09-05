@@ -24,7 +24,9 @@ OPENAI_DEFAULT_MODEL = "gpt-5"  # Use reasoning model as default
 # Can be overridden via ALLOWED_VERTEX_MODELS env var
 VERTEX_ALLOWED_MODELS = {
     "publishers/google/models/gemini-2.5-pro",
-    "publishers/google/models/gemini-2.0-flash"
+    "publishers/google/models/gemini-2.0-flash",
+    "publishers/google/models/gemini-1.5-pro",
+    "publishers/google/models/gemini-1.5-flash"
 }
 
 # Default Vertex model  
@@ -66,7 +68,16 @@ def normalize_model(vendor: str, model: str = None) -> str:
         return model
     
     elif vendor == "vertex" or vendor == "gemini_direct":
-        # Always force the canonical Vertex model
+        # Normalize Gemini model names
+        if "gemini-1.5-pro" in model:
+            return "publishers/google/models/gemini-1.5-pro"
+        elif "gemini-1.5-flash" in model:
+            return "publishers/google/models/gemini-1.5-flash"
+        elif "gemini-2.0-flash" in model:
+            return "publishers/google/models/gemini-2.0-flash"
+        elif "gemini-2.5-pro" in model:
+            return "publishers/google/models/gemini-2.5-pro"
+        # Default to the configured model
         return VERTEX_DEFAULT_MODEL
     
     return model

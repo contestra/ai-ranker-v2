@@ -141,6 +141,24 @@ None - all interfaces preserved
 - `test_gemini_vertex_lean.py` - Lean adapter validation
 - `test_router_integration.py` - Router capability tests
 
+## Grounding Enforcement
+
+### REQUIRED Mode Behavior
+The router enforces grounding requirements uniformly across all providers:
+
+1. **OpenAI**: Uses explicit citation count from response
+2. **Google (Vertex/Gemini)**: Allows unlinked citations to pass when:
+   - Tool calls > 0 (grounding was attempted)
+   - Unlinked sources > 0 (evidence was found)
+   - Flag `REQUIRED_RELAX_FOR_GOOGLE` is enabled
+
+### Citation Semantics
+All adapters now report explicit counts:
+- `anchored_citations_count`: Citations tied to specific text segments
+- `unlinked_sources_count`: Evidence-only citations without text anchoring
+- OpenAI can have both anchored and unlinked citations
+- Google providers currently only produce unlinked citations
+
 ## Production Readiness
 
 ### Checklist
@@ -152,6 +170,9 @@ None - all interfaces preserved
 - [x] Comprehensive test coverage
 - [x] Documentation updated
 - [x] Backup files created
+- [x] Full conversation history preserved (no 2-turn collapse)
+- [x] Router pacing metadata added to responses
+- [x] Original model tracked in telemetry
 
 ## Recommendations
 

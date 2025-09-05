@@ -14,7 +14,7 @@ import google.genai as genai
 from google.genai.types import (
     FunctionCallingConfig, FunctionDeclaration, GenerateContentConfig,
     GoogleSearch, HarmBlockThreshold, HarmCategory, SafetySetting, Schema,
-    Tool, ToolConfig
+    ThinkingConfig, Tool, ToolConfig
 )
 
 from app.core.config import settings
@@ -24,9 +24,10 @@ from app.llm.models import validate_model
 
 logger = logging.getLogger(__name__)
 
-# Environment configuration
-VERTEX_PROJECT = os.getenv("VERTEX_PROJECT", os.getenv("GCP_PROJECT", os.getenv("GOOGLE_CLOUD_PROJECT")))
-VERTEX_LOCATION = os.getenv("VERTEX_LOCATION", "europe-west4")
+# Environment configuration  
+# Vertex uses ADC/WIF for auth, project from env or settings
+VERTEX_PROJECT = os.getenv("VERTEX_PROJECT") or os.getenv("GCP_PROJECT") or os.getenv("GOOGLE_CLOUD_PROJECT") or settings.google_cloud_project
+VERTEX_LOCATION = os.getenv("VERTEX_LOCATION") or settings.vertex_location or "europe-west4"
 VERTEX_MAX_OUTPUT_TOKENS = int(os.getenv("VERTEX_MAX_OUTPUT_TOKENS", "8192"))
 VERTEX_GROUNDED_MAX_TOKENS = int(os.getenv("VERTEX_GROUNDED_MAX_TOKENS", "6000"))
 
@@ -152,40 +153,60 @@ def _extract_citations_from_grounding(response) -> Tuple[List[Dict[str, Any]], i
     return citations, anchored_count, unlinked_count
 
 
-def _build_two_messages(messages: List[Dict[str, str]], als_context: Dict = None) -> Tuple[str, str]:
-    """Build exactly two messages: system and user with optional ALS."""
+def _build_conversation_history(messages: List[Dict[str, str]], als_context: Dict = None) -> Tuple[Optional[str], List[Dict[str, Any]]]:
+    """Build conversation history preserving all messages.
+    Returns: (system_instruction, conversation_messages)
+    """
     system_content = None
-    user_content = None
+    conversation_messages = []
     
     for msg in messages:
         role = msg.get("role", "")
         content = msg.get("content", "")
         
         if role == "system":
+            # Combine system messages into instruction
             if system_content is None:
                 system_content = content
             else:
                 system_content += "\n" + content
         elif role == "user":
-            if user_content is None:
-                user_content = content
-            else:
-                user_content += "\n" + content
+            # Add user message to conversation
+            conversation_messages.append({
+                "role": "user",
+                "parts": [{"text": content}]
+            })
+        elif role == "assistant":
+            # Add assistant message (model in Vertex)
+            conversation_messages.append({
+                "role": "model", 
+                "parts": [{"text": content}]
+            })
     
-    # Add ALS block if provided
-    if als_context and system_content:
+    # Add ALS block if provided to system instruction
+    if als_context:
         als_block = f"\nUser location context: {als_context.get('country_code', 'unknown')}"
         if als_context.get('locale'):
             als_block += f", locale: {als_context['locale']}"
-        system_content = f"{system_content}\n{als_block}"
+        if system_content:
+            system_content = f"{system_content}\n{als_block}"
+        else:
+            system_content = f"You are a helpful assistant.{als_block}"
     
-    # Ensure we have both messages
+    # Ensure we have system content
     if not system_content:
         system_content = "You are a helpful assistant."
-    if not user_content:
-        raise ValueError("No user message found")
     
-    return system_content, user_content
+    # Ensure we have at least one message and it starts with user
+    if not conversation_messages:
+        raise ValueError("No user messages found")
+    if conversation_messages[0]["role"] == "model":
+        conversation_messages.insert(0, {
+            "role": "user",
+            "parts": [{"text": "Continue"}]
+        })
+    
+    return system_content, conversation_messages
 
 
 class VertexAdapter:
@@ -232,12 +253,13 @@ class VertexAdapter:
         # Get capabilities from router
         caps = request.metadata.get("capabilities", {}) if hasattr(request, 'metadata') else {}
         
-        # Build messages (system + user)
+        # Build conversation history
         als_context = getattr(request, 'als_context', None)
-        system_content, user_content = _build_two_messages(request.messages, als_context)
+        system_content, conversation_messages = _build_conversation_history(request.messages, als_context)
         
         # Build generation config
         max_tokens = request.max_tokens or 1024
+        
         if request.grounded:
             max_tokens = min(max_tokens, VERTEX_GROUNDED_MAX_TOKENS)
         else:
@@ -263,26 +285,34 @@ class VertexAdapter:
             )
         ]
         
+        # Configure thinking based on router capabilities
+        thinking_config = None
+        if caps.get("supports_thinking_budget", False):
+            # Read thinking budget from metadata (router provides it)
+            thinking_budget = request.metadata.get("thinking_budget_tokens") if hasattr(request, 'metadata') else None
+            include_thoughts = False
+            
+            # Check if include_thoughts is allowed and requested
+            if caps.get("include_thoughts_allowed", False):
+                if hasattr(request, 'meta') and request.meta:
+                    include_thoughts = request.meta.get("include_thoughts", False)
+            
+            if thinking_budget is not None:
+                thinking_config = ThinkingConfig(
+                    thinkingBudget=thinking_budget,
+                    includeThoughts=include_thoughts
+                )
+                metadata["thinking_budget_tokens"] = thinking_budget
+                metadata["include_thoughts"] = include_thoughts
+        
         gen_config = GenerateContentConfig(
             max_output_tokens=max_tokens,
             temperature=request.temperature if hasattr(request, 'temperature') else 0.7,
             top_p=request.top_p if hasattr(request, 'top_p') else 0.95,
             system_instruction=system_content,
-            safety_settings=safety_settings
+            safety_settings=safety_settings,
+            thinkingConfig=thinking_config  # Add thinking config
         )
-        
-        # Add thinking configuration if supported
-        if caps.get("supports_thinking_budget"):
-            thinking_budget = request.meta.get("thinking_budget") if hasattr(request, 'meta') and request.meta else None
-            if thinking_budget is not None:
-                # Note: Gemini SDK doesn't have direct thinking budget yet
-                # This is placeholder for when SDK adds support
-                metadata["thinking_budget_requested"] = thinking_budget
-        
-        if caps.get("include_thoughts_allowed"):
-            include_thoughts = request.meta.get("include_thoughts", False) if hasattr(request, 'meta') and request.meta else False
-            if include_thoughts:
-                metadata["include_thoughts_requested"] = True
         
         # Determine if we need JSON output and how to achieve it
         json_schema_requested = False
@@ -354,7 +384,7 @@ class VertexAdapter:
         try:
             response = await self.client.aio.models.generate_content(
                 model=model_id,
-                contents=user_content,
+                contents=conversation_messages,
                 config=gen_config
             )
             
@@ -410,7 +440,7 @@ class VertexAdapter:
                 metadata["anchored_citations_count"] = 0
                 metadata["unlinked_sources_count"] = 0
             
-            # Extract usage
+            # Extract usage with thinking tokens
             usage = {}
             if hasattr(response, 'usage_metadata'):
                 usage_meta = response.usage_metadata
@@ -419,6 +449,20 @@ class VertexAdapter:
                     "completion_tokens": getattr(usage_meta, 'candidates_token_count', 0),
                     "total_tokens": getattr(usage_meta, 'total_token_count', 0)
                 }
+                # Add thinking tokens to metadata for telemetry
+                metadata["usage"] = {
+                    "thoughts_token_count": getattr(usage_meta, 'thoughts_token_count', None),
+                    "input_token_count": getattr(usage_meta, 'prompt_token_count', 0),
+                    "output_token_count": getattr(usage_meta, 'candidates_token_count', 0),
+                    "total_token_count": getattr(usage_meta, 'total_token_count', 0)
+                }
+            
+            # Add finish reason to metadata
+            if response and hasattr(response, 'candidates') and response.candidates:
+                for candidate in response.candidates:
+                    if hasattr(candidate, 'finish_reason'):
+                        metadata["finish_reason"] = str(candidate.finish_reason)
+                        break
             
             # Calculate latency
             latency_ms = int((time.perf_counter() - start_time) * 1000)

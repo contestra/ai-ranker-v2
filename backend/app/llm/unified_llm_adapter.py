@@ -336,6 +336,11 @@ class UnifiedLLMAdapter:
         # Normalize model
         request.model = normalize_model(request.vendor, request.model)
         
+        # Store original model in metadata for telemetry
+        if not hasattr(request, 'metadata'):
+            request.metadata = {}
+        request.metadata['original_model'] = original_model_pre_norm
+        
         
         def _bare_gemini_id(m: str) -> str:
             if m.startswith("publishers/google/models/"):
@@ -347,7 +352,7 @@ class UnifiedLLMAdapter:
         if request.vendor == "vertex":
             # Check against configurable allowlist
             allowed_models = os.getenv("ALLOWED_VERTEX_MODELS", 
-                "publishers/google/models/gemini-2.5-pro,publishers/google/models/gemini-2.0-flash").split(",")
+                "publishers/google/models/gemini-2.5-pro,publishers/google/models/gemini-2.0-flash,publishers/google/models/gemini-1.5-pro,publishers/google/models/gemini-1.5-flash").split(",")
             if request.model not in allowed_models:
                 raise ValueError(
                     f"Model not allowed: {request.model}\n"
@@ -446,6 +451,7 @@ class UnifiedLLMAdapter:
         pacing_delay = self._check_pacing(vendor, model)
         if pacing_delay > 0:
             # Apply pacing delay
+            logger.info(f"[PACING] Applying {pacing_delay:.2f}s delay for {vendor}:{model}")
             await asyncio.sleep(pacing_delay)
             if not hasattr(request, 'metadata'):
                 request.metadata = {}
@@ -471,6 +477,34 @@ class UnifiedLLMAdapter:
         
         # Set flag to prevent any proxy usage downstream
         request.proxies_disabled = DISABLE_PROXIES
+        
+        # Step 3.8: Apply thinking defaults for Gemini-2.5-Pro
+        if request.vendor in ("gemini_direct", "vertex"):
+            bare_model = self._bare_gemini_model(request.model)
+            if "gemini-2.5-pro" in bare_model.lower():
+                # Only apply if capability is supported
+                if caps.get("supports_thinking_budget", False):
+                    # Apply thinking budget default if not specified
+                    if not hasattr(request, 'meta') or not request.meta or request.meta.get("thinking_budget") is None:
+                        default_thinking_budget = int(os.getenv("GEMINI_PRO_THINKING_BUDGET", "256"))
+                        if not hasattr(request, 'metadata'):
+                            request.metadata = {}
+                        request.metadata["thinking_budget_tokens"] = default_thinking_budget
+                        logger.debug(f"[GEMINI_PRO_DEFAULTS] Applied thinking_budget_tokens={default_thinking_budget}")
+                    else:
+                        # Use explicit value from request
+                        if not hasattr(request, 'metadata'):
+                            request.metadata = {}
+                        request.metadata["thinking_budget_tokens"] = request.meta.get("thinking_budget")
+                
+                # Apply max_output_tokens default if not specified
+                if not request.max_tokens:
+                    if request.grounded:
+                        default_max_tokens = int(os.getenv("GEMINI_PRO_MAX_OUTPUT_TOKENS_GROUNDED", "1536"))
+                    else:
+                        default_max_tokens = int(os.getenv("GEMINI_PRO_MAX_OUTPUT_TOKENS_UNGROUNDED", "768"))
+                    request.max_tokens = default_max_tokens
+                    logger.debug(f"[GEMINI_PRO_DEFAULTS] Applied max_tokens={default_max_tokens} (grounded={request.grounded})")
         
         # Step 4: Calculate timeout based on grounding
         timeout = GROUNDED_TIMEOUT if request.grounded else UNGROUNDED_TIMEOUT
@@ -625,6 +659,10 @@ class UnifiedLLMAdapter:
         response.metadata['reasoning_hint_dropped'] = reasoning_hint_dropped
         response.metadata['thinking_hint_dropped'] = thinking_hint_dropped
         response.metadata['circuit_breaker_status'] = cb_status
+        
+        # Add pacing metadata if it was applied
+        if hasattr(request, 'metadata') and request.metadata and 'router_pacing_delay' in request.metadata:
+            response.metadata['router_pacing_delay'] = request.metadata['router_pacing_delay']
         
         # Post-validation for REQUIRED mode - enforce grounding requirement
         # This provides uniform enforcement across all providers, especially those that can't force tools
@@ -958,7 +996,14 @@ class UnifiedLLMAdapter:
                 'web_search_count': response.metadata.get('web_search_count', 0) if hasattr(response, 'metadata') else 0,
                 'web_grounded': response.metadata.get('web_grounded', False) if hasattr(response, 'metadata') else False,
                 'synthesis_step_used': response.metadata.get('synthesis_step_used', False) if hasattr(response, 'metadata') else False,
-                'extraction_path': response.metadata.get('extraction_path') if hasattr(response, 'metadata') else None
+                'extraction_path': response.metadata.get('extraction_path') if hasattr(response, 'metadata') else None,
+                
+                # Usage telemetry (pass through from adapters)
+                'usage': response.metadata.get('usage') if hasattr(response, 'metadata') else None,
+                'finish_reason': response.metadata.get('finish_reason') if hasattr(response, 'metadata') else None,
+                
+                # Thinking budget telemetry
+                'thinking_budget_tokens': request.metadata.get('thinking_budget_tokens') if hasattr(request, 'metadata') else None
             }
             
             # Cheap derived metric for dashboards - citations count

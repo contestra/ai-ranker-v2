@@ -25,6 +25,7 @@ OPENAI_MAX_RETRIES = int(os.getenv("OPENAI_MAX_RETRIES", "5"))
 OPENAI_TIMEOUT_SECONDS = int(os.getenv("OPENAI_TIMEOUT_SECONDS", "60"))
 GROUNDED_MAX_OUTPUT_TOKENS = int(os.getenv("OPENAI_GROUNDED_MAX_TOKENS", "6000"))
 MIN_OUTPUT_TOKENS = 16  # Responses API minimum
+OPENAI_GROUNDED_TWO_STEP = os.getenv("OPENAI_GROUNDED_TWO_STEP", "false").lower() == "true"
 
 # TextEnvelope schema for ungrounded fallback (GPT-5 empty text quirk)
 TEXT_ENVELOPE_SCHEMA = {
@@ -42,6 +43,7 @@ class OpenAIAdapter:
     
     def __init__(self):
         """Initialize with SDK-managed client."""
+        settings = get_settings()
         api_key = os.getenv("OPENAI_API_KEY") or settings.openai_api_key
         if not api_key:
             raise ValueError("OpenAI API key not configured")
@@ -66,34 +68,42 @@ class OpenAIAdapter:
         return model
     
     def _build_payload(self, request: LLMRequest, is_grounded: bool) -> Dict:
-        """Build Responses API payload."""
-        # Extract messages
-        system_content = ""
-        user_content = ""
-        for msg in request.messages:
-            if msg["role"] == "system":
-                system_content = msg["content"]
-            elif msg["role"] == "user":
-                user_content = msg["content"]
-        
-        # Build typed content blocks
+        """Build Responses API payload preserving full conversation history."""
+        # Preserve full conversation history
         input_messages = []
-        if system_content:
-            input_messages.append({
-                "role": "system",
-                "content": [{"type": "input_text", "text": system_content}]
-            })
-        input_messages.append({
-            "role": "user",
-            "content": [{"type": "input_text", "text": user_content}]
-        })
+        
+        for msg in request.messages:
+            role = msg["role"]
+            content = msg["content"]
+            
+            # Map role appropriately (system, user, assistant)
+            if role == "system":
+                input_messages.append({
+                    "role": "system",
+                    "content": [{"type": "input_text", "text": content}]
+                })
+            elif role == "user":
+                input_messages.append({
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": content}]
+                })
+            elif role == "assistant":
+                input_messages.append({
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": content}]
+                })
+            # Skip any other roles for now
         
         # Base payload
         effective_model = self._map_model(request.model)
         
         if is_grounded:
-            # Grounded: respect caller's max_tokens if provided, otherwise use grounded default
-            max_tokens = min(request.max_tokens or GROUNDED_MAX_OUTPUT_TOKENS, GROUNDED_MAX_OUTPUT_TOKENS)
+            # Grounded: use higher default (6000) to avoid token starvation
+            # Caller can still override with lower value if needed
+            max_tokens = request.max_tokens or GROUNDED_MAX_OUTPUT_TOKENS
+            # But still cap at the maximum we allow
+            max_tokens = min(max_tokens, GROUNDED_MAX_OUTPUT_TOKENS)
+            
             payload = {
                 "model": effective_model,
                 "input": input_messages,
@@ -104,6 +114,11 @@ class OpenAIAdapter:
             # Tool choice for grounding mode
             # Note: web_search only supports "auto" tool_choice
             payload["tool_choice"] = "auto"
+            
+            # Add text format to ensure final synthesis
+            payload["text"] = {
+                "format": {"type": "text"}
+            }
         else:
             # Ungrounded: respect caller's max_tokens if provided, otherwise use default
             max_tokens = request.max_tokens or 1024
@@ -162,25 +177,54 @@ class OpenAIAdapter:
                 return response, web_tool_type
             raise
     
-    def _extract_content(self, response: Any) -> Tuple[str, str]:
+    def _extract_content(self, response: Any, is_grounded: bool = False) -> Tuple[str, str]:
         """Extract text content from response.
         Returns: (content, source)
         """
-        # Try message items first
-        if hasattr(response, 'output') and isinstance(response.output, list):
-            for item in response.output:
-                if hasattr(item, 'type') and item.type == 'message':
-                    if hasattr(item, 'content') and isinstance(item.content, list):
-                        texts = []
-                        for content_item in item.content:
-                            if hasattr(content_item, 'text'):
-                                texts.append(content_item.text)
-                        if texts:
-                            return ''.join(texts), "message"
+        # For grounded: prefer output_text (where final synthesis appears)
+        # For ungrounded: try message items first, then output_text
         
-        # Fallback to output_text
-        if hasattr(response, 'output_text') and response.output_text:
-            return response.output_text, "output_text"
+        if is_grounded:
+            # Grounded: output_text is primary
+            if hasattr(response, 'output_text') and response.output_text:
+                return response.output_text, "output_text"
+            
+            # Fallback to message items
+            if hasattr(response, 'output') and isinstance(response.output, list):
+                for item in response.output:
+                    if hasattr(item, 'type') and item.type == 'message':
+                        if hasattr(item, 'content') and isinstance(item.content, list):
+                            texts = []
+                            for content_item in item.content:
+                                if hasattr(content_item, 'text'):
+                                    texts.append(content_item.text)
+                            if texts:
+                                return ''.join(texts), "message"
+            
+            # Log if we have search but no content
+            if hasattr(response, 'output') and isinstance(response.output, list):
+                has_search = any(
+                    hasattr(item, 'type') and 'search' in item.type 
+                    for item in response.output
+                )
+                if has_search:
+                    logger.warning("[OAI] Grounded response has search results but no output_text or message")
+        else:
+            # Ungrounded: try message items first
+            if hasattr(response, 'output') and isinstance(response.output, list):
+                for item in response.output:
+                    if hasattr(item, 'type') and item.type == 'message':
+                        if hasattr(item, 'content') and isinstance(item.content, list):
+                            texts = []
+                            for content_item in item.content:
+                                if hasattr(content_item, 'text'):
+                                    texts.append(content_item.text)
+                            if texts:
+                                return ''.join(texts), "message"
+            
+            # Fallback to output_text
+            if hasattr(response, 'output_text') and response.output_text:
+                return response.output_text, "output_text"
         
         return "", "none"
     
@@ -299,7 +343,7 @@ class OpenAIAdapter:
                 metadata["grounded_evidence_present"] = False
                 
                 # Check if we need TextEnvelope fallback
-                content, source = self._extract_content(response)
+                content, source = self._extract_content(response, is_grounded=False)
                 if not content:
                     # Single fallback for GPT-5 empty text quirk
                     logger.info("[OAI] Empty ungrounded response, trying TextEnvelope fallback")
@@ -336,13 +380,86 @@ class OpenAIAdapter:
             anchored_count = 0
             unlinked_count = 0
             if is_grounded:
-                content, source = self._extract_content(response)
+                content, source = self._extract_content(response, is_grounded=True)
                 metadata["fallback_used"] = False
                 # Extract citations from web search results
                 citations, anchored_count, unlinked_count = self._extract_citations(response)
                 metadata["citation_count"] = len(citations)
                 metadata["anchored_citations_count"] = anchored_count
                 metadata["unlinked_sources_count"] = unlinked_count
+                
+                # Provoker retry: if we have searches but no content, try once more with a provoker
+                if tool_count > 0 and not content:
+                    logger.info("[OAI] Grounded response has searches but no content, trying provoker retry")
+                    metadata["provoker_retry_used"] = True
+                    
+                    # Add provoker message to input
+                    utc_date = datetime.utcnow().strftime("%Y-%m-%d")
+                    provoker_payload = payload.copy()
+                    provoker_payload["input"] = provoker_payload["input"].copy()
+                    provoker_payload["input"].append({
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": f"As of today ({utc_date}), produce a concise final answer that directly answers the user and include at least one official source URL."}]
+                    })
+                    
+                    # Retry with provoker
+                    response, _ = await self._call_with_tool_negotiation(provoker_payload, timeout)
+                    content, source = self._extract_content(response, is_grounded=True)
+                    
+                    # Re-extract citations from the new response
+                    if content:
+                        citations, anchored_count, unlinked_count = self._extract_citations(response)
+                        metadata["citation_count"] = len(citations)
+                        metadata["anchored_citations_count"] = anchored_count
+                        metadata["unlinked_sources_count"] = unlinked_count
+                    
+                    # Two-step fallback if still empty and flag is enabled
+                    if tool_count > 0 and not content and OPENAI_GROUNDED_TWO_STEP:
+                        logger.info("[OAI] Provoker failed, attempting two-step synthesis")
+                        metadata["synthesis_step_used"] = True
+                        metadata["synthesis_tool_count"] = tool_count
+                        
+                        # Build evidence block from citations
+                        evidence_lines = []
+                        for i, cite in enumerate(citations[:5], 1):
+                            title = cite.get('title', 'Untitled')[:80]
+                            url = cite.get('url', '')
+                            if url:
+                                evidence_lines.append(f"{i}) {title} — {url}")
+                        
+                        metadata["synthesis_evidence_count"] = len(evidence_lines)
+                        
+                        # Build synthesis payload without tools
+                        synthesis_payload = {
+                            "model": effective_model,
+                            "input": payload["input"].copy(),
+                            "tools": [],  # No tools for synthesis
+                            "max_output_tokens": max(payload.get("max_output_tokens", 1024), MIN_OUTPUT_TOKENS)
+                        }
+                        
+                        # Add evidence and synthesis instruction
+                        if evidence_lines:
+                            evidence_text = "Evidence (for your synthesis):\n" + "\n".join(evidence_lines)
+                            synthesis_payload["input"].append({
+                                "role": "user",
+                                "content": [{"type": "input_text", "text": evidence_text}]
+                            })
+                        
+                        synthesis_payload["input"].append({
+                            "role": "user",
+                            "content": [{"type": "input_text", "text": "Synthesize a final answer now. Do not browse. Cite from the evidence list only."}]
+                        })
+                        
+                        # Keep text format if it was requested
+                        if "text" in payload:
+                            synthesis_payload["text"] = payload["text"]
+                        
+                        # Call without tools for synthesis
+                        response = await self.client.responses.create(**synthesis_payload, timeout=timeout)
+                        content, source = self._extract_content(response, is_grounded=False)  # Use ungrounded extraction for synthesis
+                        metadata["text_source"] = f"synthesis_{source}"
+                else:
+                    metadata["provoker_retry_used"] = False
             else:
                 # Ungrounded - always set counts to 0
                 metadata["anchored_citations_count"] = 0
