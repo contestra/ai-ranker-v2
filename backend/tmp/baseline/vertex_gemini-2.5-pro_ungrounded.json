@@ -1,0 +1,53 @@
+{
+  "test": "vertex_publishers/google/models/gemini-2.5-pro_ungrounded",
+  "timestamp": "2025-09-06T11:41:25.830151",
+  "success": true,
+  "error": null,
+  "content_length": 10,
+  "content_preview": "2 + 2 = 4.",
+  "metadata": {
+    "timestamp": "2025-09-06T11:40:48.773089",
+    "vendor": "vertex",
+    "model": "publishers/google/models/gemini-2.5-pro",
+    "response_api": "vertex_genai",
+    "request_id": "req_1757158848773",
+    "region": "us-central1",
+    "thinking_budget_tokens": 256,
+    "include_thoughts": false,
+    "thinking_hint_applied": true,
+    "schema_tool_invoked": false,
+    "anchored_citations_count": 0,
+    "unlinked_sources_count": 0,
+    "tool_call_count": 0,
+    "grounded_evidence_present": false,
+    "web_search_signal_count": 0,
+    "usage": {
+      "thoughts_token_count": 173,
+      "input_token_count": 123,
+      "output_token_count": 8,
+      "total_token_count": 304
+    },
+    "finish_reason": "STOP",
+    "finish_reason_source": "sdk_native",
+    "finish_reason_standardized": "STOP",
+    "latency_ms": 37056,
+    "reasoning_hint_dropped": false,
+    "thinking_hint_dropped": false,
+    "circuit_breaker_status": "closed",
+    "als_present": true,
+    "als_block_sha256": "11f5e33e311fab599689cc653c29651cce459bec1b37908a257a1af74f6829a6",
+    "als_variant_id": "variant_4",
+    "seed_key_id": "k1",
+    "als_country": "DE",
+    "als_locale": "de-DE",
+    "als_nfc_length": 191,
+    "als_template_id": "als_template_DE",
+    "als_mirrored_by_router": true
+  },
+  "citations_count": 0,
+  "usage": {
+    "prompt_tokens": 123,
+    "completion_tokens": 8,
+    "total_tokens": 304
+  }
+}
