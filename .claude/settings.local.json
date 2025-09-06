@@ -1,19 +1,14 @@
 {
   "permissions": {
     "allow": [
-      "Bash(VERTEX_LOCATION=us-central1 python3 test_vertex_als_de.py)",
-      "Bash(VERTEX_LOCATION=us-central1 python3 test_vertex_als_de_simple.py)",
-      "Bash(REQUIRED_RELAX_FOR_GOOGLE=true python3 test_required_centralized.py)",
-      "Bash(VERTEX_LOCATION=us-central1 python3 test_vertex_health_news.py)",
-      "Bash(OPENAI_PROVOKER_ENABLED=false python3 test_gpt5_health_news.py)",
-      "Bash(export OPENAI_PROVOKER_ENABLED=false)",
-      "Bash(find:*)",
-      "Bash(mkdir:*)",
-      "Bash(cp:*)",
-      "Bash(rm:*)",
-      "Bash(python3:*)",
-      "Bash(OPENAI_PROVOKER_ENABLED=false python3 test_openai_als_de.py)",
-      "Bash(git add:*)"
+      "Bash(if [ -n \"$GOOGLE_API_KEY\" ])",
+      "Bash(then echo \"GOOGLE_API_KEY is set\")",
+      "Bash(elif [ -n \"$GEMINI_API_KEY\" ])",
+      "Bash(then echo \"GEMINI_API_KEY is set\")",
+      "Bash(else echo \"No Gemini/Google API key found\")",
+      "Bash(fi)",
+      "Bash(env)",
+      "Bash(export)"
     ],
     "deny": [],
     "ask": [],

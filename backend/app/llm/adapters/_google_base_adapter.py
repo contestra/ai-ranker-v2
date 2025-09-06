@@ -6,6 +6,7 @@ Shared Google adapter logic for Gemini Direct and Vertex.
 - Normalizes metadata keys expected by the router/telemetry
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -60,7 +61,7 @@ def _extract_text_from_response(response) -> str:
                 t = getattr(part, "text", None)
                 if isinstance(t, str):
                     out.append(t)
-    return "".join(out).strip()
+    return "\n".join(out).strip()
 
 
 def _extract_function_call(response) -> Tuple[Optional[str], Optional[Dict]]:
@@ -370,16 +371,21 @@ class GoogleBaseAdapter:
                     logger.debug(f"  - tool[{i}]: Functions")
         
         try:
-            response = await self.client.aio.models.generate_content(
-                model=model_for_sdk,
-                contents=conversation,
-                config=gen_config,
+            # Wrap SDK call with timeout to ensure it respects the timeout even if SDK hangs
+            response = await asyncio.wait_for(
+                self.client.aio.models.generate_content(
+                    model=model_for_sdk,
+                    contents=conversation,
+                    config=gen_config,
+                ),
+                timeout=timeout
             )
 
             # Prefer tool result if present
             func_name, func_args = _extract_function_call(response)
             if func_name == "emit_result" and isinstance(func_args, dict):
                 content = json.dumps(func_args, ensure_ascii=False)
+                metadata["extraction_path"] = "google_schema_tool"
                 metadata["schema_tool_invoked"] = True
             else:
                 content = _extract_text_from_response(response)
@@ -397,13 +403,41 @@ class GoogleBaseAdapter:
                 if queries:
                     metadata["search_queries"] = queries[:10]
 
-                # Primary signal: any grounding_metadata chunks/queries
+                # Improved tool-call counting: count actual search signals
+                tool_call_count = 0
+                
+                # Count search queries as a signal
+                if queries:
+                    tool_call_count += 1
+                
+                # Count citations (chunks) as a signal
+                if anchored_count + unlinked_count > 0:
+                    tool_call_count += 1
+                
+                # Store raw count for telemetry evolution
+                tool_call_count_raw = tool_call_count
+                metadata["web_search_signal_count"] = tool_call_count_raw
+                
+                # Cap at 1 for backward compatibility
+                tool_call_count = min(tool_call_count, 1)
+                
+                # If we have any tool calls, grounding is effective
+                if tool_call_count > 0:
+                    grounded_effective = True
+                    # Add extraction_path hint when we have grounding chunks
+                    if anchored_count + unlinked_count > 0:
+                        metadata["extraction_path"] = "google_grounding_chunks"
+                
+                # Also check for grounding_metadata presence (fallback)
                 grounding_confidence = None
                 for cand in response.candidates or []:
                     gm = getattr(cand, "grounding_metadata", None)
-                    if gm and (getattr(gm, "grounding_chunks", []) or getattr(gm, "search_queries", [])):
-                        grounded_effective = True
-                        tool_call_count = 1
+                    if gm:
+                        # Even if no queries/chunks counted above, presence of metadata indicates attempt
+                        if not grounded_effective and (getattr(gm, "grounding_chunks", []) or getattr(gm, "search_queries", [])):
+                            grounded_effective = True
+                            if tool_call_count == 0:
+                                tool_call_count = 1
                         
                         # Capture grounding confidence if SDK exposes it (for future ranking)
                         if hasattr(gm, "grounding_confidence"):
@@ -428,8 +462,12 @@ class GoogleBaseAdapter:
                 if grounding_mode == "REQUIRED" and not grounded_effective:
                     metadata["why_not_grounded"] = "No GoogleSearch invoked despite REQUIRED mode"
             else:
+                # Not grounded - set defaults
                 metadata["anchored_citations_count"] = 0
                 metadata["unlinked_sources_count"] = 0
+                metadata["tool_call_count"] = 0
+                metadata["grounded_evidence_present"] = False
+                metadata["web_search_signal_count"] = 0
 
             # Usage & finish reason
             usage = {}
@@ -512,6 +550,10 @@ class GoogleBaseAdapter:
             )
 
         # GroundingRequiredFailedError handling removed - router enforces REQUIRED
+        except asyncio.TimeoutError:
+            # Log timeout and re-raise so router CB/pacing can act
+            logger.error(f"[{self._vendor_key()}] SDK call exceeded timeout={timeout}s")
+            raise
         except Exception as e:
             logger.error(f"[{self._vendor_key()}] API error: {str(e)[:200]}")
             raise

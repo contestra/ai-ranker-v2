@@ -49,8 +49,8 @@ class OpenAIAdapter:
     
     def __init__(self):
         """Initialize with SDK-managed client."""
-        settings = get_settings()
-        api_key = os.getenv("OPENAI_API_KEY") or settings.openai_api_key
+        local_settings = get_settings()
+        api_key = os.getenv("OPENAI_API_KEY") or local_settings.openai_api_key
         if not api_key:
             raise ValueError("OpenAI API key not configured")
         
@@ -216,7 +216,7 @@ class OpenAIAdapter:
                                 if hasattr(content_item, 'text'):
                                     texts.append(content_item.text)
                             if texts:
-                                return ''.join(texts), "message"
+                                return '\n'.join(texts), "message"
             
             # Log if we have search but no content
             if hasattr(response, 'output') and isinstance(response.output, list):
@@ -237,7 +237,7 @@ class OpenAIAdapter:
                                 if hasattr(content_item, 'text'):
                                     texts.append(content_item.text)
                             if texts:
-                                return ''.join(texts), "message"
+                                return '\n'.join(texts), "message"
             
             # Fallback to output_text
             if hasattr(response, 'output_text') and response.output_text:
@@ -255,7 +255,8 @@ class OpenAIAdapter:
         if hasattr(response, 'output') and isinstance(response.output, list):
             for item in response.output:
                 if hasattr(item, 'type'):
-                    if 'search' in item.type and 'call' in item.type:
+                    # Broaden detection: any item with "search" and ("call" or "tool")
+                    if 'search' in item.type and ('call' in item.type or 'tool' in item.type):
                         count += 1
                         types.append(item.type)
         
@@ -334,6 +335,68 @@ class OpenAIAdapter:
                                 # Limit to top 10 citations
                                 if len(citations) >= 10:
                                     break
+        
+        # Second pass: check message items for anchored citations
+        # This handles cases where citations appear inline without explicit web_search_call
+        if hasattr(response, 'output') and isinstance(response.output, list):
+            for item in response.output:
+                if hasattr(item, 'type') and item.type == 'message':
+                    if hasattr(item, 'content') and isinstance(item.content, list):
+                        for content_item in item.content:
+                            # Check for annotations, references, or citations on the content part
+                            annotations = None
+                            if hasattr(content_item, 'annotations'):
+                                annotations = content_item.annotations
+                            elif hasattr(content_item, 'references'):
+                                annotations = content_item.references
+                            elif hasattr(content_item, 'citations'):
+                                annotations = content_item.citations
+                            
+                            if annotations and isinstance(annotations, list):
+                                for annotation in annotations:
+                                    url = None
+                                    if hasattr(annotation, 'url'):
+                                        url = annotation.url
+                                    elif hasattr(annotation, 'link'):
+                                        url = annotation.link
+                                    elif hasattr(annotation, 'href'):
+                                        url = annotation.href
+                                    
+                                    if url:
+                                        # Normalize URL for deduplication
+                                        normalized_url = url.lower().strip('/')
+                                        if normalized_url not in seen_urls:
+                                            seen_urls.add(normalized_url)
+                                            
+                                            # Extract domain
+                                            try:
+                                                parsed = urlparse(url)
+                                                domain = parsed.netloc.lower().replace('www.', '')
+                                            except:
+                                                domain = 'unknown'
+                                            
+                                            # Extract title if available
+                                            title = ''
+                                            if hasattr(annotation, 'title'):
+                                                title = annotation.title
+                                            elif hasattr(annotation, 'text'):
+                                                title = annotation.text
+                                            elif hasattr(annotation, 'name'):
+                                                title = annotation.name
+                                            
+                                            # These are anchored by definition
+                                            anchored_count += 1
+                                            
+                                            citations.append({
+                                                'url': url,
+                                                'title': title[:200] if title else '',
+                                                'domain': domain,
+                                                'source_type': 'url_annotation'
+                                            })
+                                            
+                                            # Still limit to 10 total
+                                            if len(citations) >= 10:
+                                                break
         
         # Calculate unlinked count
         unlinked_count = len(citations) - anchored_count
@@ -489,6 +552,11 @@ class OpenAIAdapter:
                 metadata["anchored_citations_count"] = anchored_count
                 metadata["unlinked_sources_count"] = unlinked_count
                 
+                # If we have anchored citations but no tool calls, still mark as grounded
+                if anchored_count > 0 and metadata["tool_call_count"] == 0:
+                    metadata["grounded_evidence_present"] = True
+                    metadata["extraction_path"] = "openai_anchored_annotations"
+                
                 # Provoker retry: if enabled and we have searches but no content, try once more with a provoker
                 if OPENAI_PROVOKER_ENABLED and tool_count > 0 and not content:
                     logger.info("[OAI] Grounded response has searches but no content, trying provoker retry")
@@ -528,6 +596,11 @@ class OpenAIAdapter:
                         metadata["citation_count"] = len(citations)
                         metadata["anchored_citations_count"] = anchored_count
                         metadata["unlinked_sources_count"] = unlinked_count
+                        
+                        # Recalculate grounded evidence after provoker
+                        if anchored_count > 0 and metadata["tool_call_count"] == 0:
+                            metadata["grounded_evidence_present"] = True
+                            metadata["extraction_path"] = "openai_anchored_annotations"
                     
                     # Two-step fallback if still empty and flag is enabled
                     if tool_count > 0 and not content and OPENAI_GROUNDED_TWO_STEP:
@@ -685,8 +758,7 @@ class OpenAIAdapter:
             # Google uses: STOP, MAX_TOKENS, SAFETY, etc.
             # OpenAI uses: stop, length, content_filter, etc.
             standardized = self._standardize_finish_reason(finish_reason)
-            if standardized != finish_reason:
-                metadata["finish_reason_standardized"] = standardized
+            metadata["finish_reason_standardized"] = standardized
             
             # Calculate response hash for provenance
             if content:

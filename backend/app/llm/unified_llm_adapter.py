@@ -33,12 +33,8 @@ GROUNDED_TIMEOUT = int(os.getenv("LLM_TIMEOUT_GR", "120"))
 DISABLE_PROXIES = os.getenv("DISABLE_PROXIES", "true").lower() in ("true", "1", "yes")
 
 # Feature flags
-# Route Gemini models via direct google-genai (instead of Vertex)
-USE_GEMINI_DIRECT = os.getenv("USE_GEMINI_DIRECT", "false").lower() in ("true","1","yes","on")
 # Relax REQUIRED for Google vendors (Vertex/Gemini-direct): allow pass when tool calls + unlinked URLs exist
 REQUIRED_RELAX_FOR_GOOGLE = os.getenv("REQUIRED_RELAX_FOR_GOOGLE", "false").lower() in ("true","1","yes","on")
-# Enable failover from Gemini Direct to Vertex on 503 errors
-GEMINI_DIRECT_FAILOVER_TO_VERTEX = os.getenv("GEMINI_DIRECT_FAILOVER_TO_VERTEX", "false").lower() in ("true","1","yes","on")
 
 # Circuit breaker configuration
 CB_COOLDOWN_SECONDS = int(os.getenv("CB_COOLDOWN_SECONDS", "60"))
@@ -529,78 +525,24 @@ class UnifiedLLMAdapter:
             logger.debug(f"[GROUNDING_ATTEMPT] Attempting grounded request: vendor={request.vendor}, "
                         f"model={request.model}, json_mode={getattr(request, 'json_mode', False)}")
         
-        # Track vendor path for failover
-        vendor_path = [request.vendor]
-        failover_applied = False
-        failover_reason = None
-        
         try:
+            # Route strictly by vendor - no cross-provider fallbacks
             if request.vendor == "openai":
                 response = await self.openai_adapter.complete(request, timeout=timeout)
                 self._record_success(request.vendor, request.model)
-            elif (
-                request.vendor == "gemini_direct"
-                or (
-                    request.vendor == "vertex"
-                    and USE_GEMINI_DIRECT
-                    and str(request.model).startswith(("publishers/google/models/gemini-", "models/gemini-", "gemini-"))
-                )
-            ):
-                try:
-                    vendor_path.append("gemini_direct")
-                    response = await self.gemini_adapter.complete(request, timeout=timeout)
-                    self._record_success("gemini_direct", request.model)
-                except Exception as e:
-                    # Record failure and update pacing
-                    self._record_failure("gemini_direct", request.model, e)
-                    self._update_pacing("gemini_direct", request.model, e)
-                    
-                    error_str = str(e)
-                    # Check if it's a circuit breaker open error and failover is enabled
-                    transient = self._is_transient_error('gemini_direct', e)
-                    if (
-                        GEMINI_DIRECT_FAILOVER_TO_VERTEX
-                        and (vendor_path and vendor_path[-1] == 'gemini_direct')
-                        and ("Circuit breaker open" in error_str or transient)
-                    ):
-                        # Attempt failover to Vertex
-                        logger.info(f"[FAILOVER] Attempting failover from gemini_direct to vertex due to circuit breaker")
-                        vendor_path.append("vertex")
-                        failover_applied = True
-                        failover_reason = "503_circuit_open"
-                        
-                        # Create a copy of the request for Vertex
-                        import copy
-                        vertex_req = copy.deepcopy(request)
-                        vertex_req.vendor = "vertex"
-                        
-                        # Use Vertex adapter's normalization to ensure proper model format
-                        # This delegates to the adapter's canonical normalization logic
-                        # instead of fragile string surgery in the router
-                        vertex_req.model = self.vertex_adapter._normalize_for_validation(vertex_req.model)
-                        
-                        response = await self.vertex_adapter.complete(vertex_req, timeout=timeout)
-                        self._record_success("vertex", vertex_req.model)
-                        
-                        # Add failover metadata
-                        if not hasattr(response, "metadata"):
-                            response.metadata = {}
-                        response.metadata["vendor_path"] = vendor_path
-                        response.metadata["failover_from"] = "gemini_direct"
-                        response.metadata["failover_to"] = "vertex"
-                        response.metadata["failover_reason"] = failover_reason
-                    else:
-                        # Re-raise if not a failover scenario
-                        raise
-            else:  # vertex - NO SILENT FALLBACKS, auth errors should surface
+            elif request.vendor == "gemini_direct":
+                response = await self.gemini_adapter.complete(request, timeout=timeout)
+                self._record_success(request.vendor, request.model)
+            elif request.vendor == "vertex":
                 response = await self.vertex_adapter.complete(request, timeout=timeout)
                 self._record_success(request.vendor, request.model)
+            else:
+                raise ValueError(f"Unknown vendor: {request.vendor}")
                 
         except Exception as e:
-            # Record failure and update pacing if we haven't already
-            if not failover_applied:
-                self._record_failure(request.vendor, request.model, e)
-                self._update_pacing(request.vendor, request.model, e)
+            # Record failure and update pacing - no cross-provider rerouting
+            self._record_failure(request.vendor, request.model, e)
+            self._update_pacing(request.vendor, request.model, e)
             
             # Convert adapter exceptions to LLM response format
             error_msg = str(e)
@@ -1001,20 +943,7 @@ class UnifiedLLMAdapter:
                 'circuit_breaker_open_count': self._cb_open_count,
                 'router_pacing_delay': response.metadata.get('router_pacing_delay', False) if hasattr(response, 'metadata') else False,
                 
-                
-        # Direct Gemini allowlist (router is SSoT)
-        # is_gemini_model = str(request.model).startswith(("publishers/google/models/gemini-", "models/gemini-", "gemini-"))
-        # if request.vendor == "gemini_direct" or (request.vendor == "vertex" and USE_GEMINI_DIRECT and is_gemini_model):
-            # allowed_direct_csv = os.getenv("ALLOWED_GEMINI_DIRECT_MODELS", "")
-            # if allowed_direct_csv.strip():
-                # allowed_direct = { self._get_bare_model_name(x.strip(), "gemini_direct") for x in allowed_direct_csv.split(",") if x.strip() }
-                # if self._get_bare_model_name(request.model, "gemini_direct") not in allowed_direct:
-                    # raise ValueError(
-                        # f"Model not allowed for direct Gemini: {request.model}. "
-                        # f"Allowed (direct): {sorted(allowed_direct)}"
-                    # )
-            # If not configured, we fall back implicitly to Vertex allowlist above
-# Proxy normalization tracking
+                # Proxy normalization tracking
                 'vantage_policy_before': getattr(request, 'original_vantage_policy', None),
                 'vantage_policy_after': getattr(request, 'vantage_policy', 'ALS_ONLY'),
                 'proxies_normalized': getattr(request, 'proxy_normalization_applied', False),
@@ -1103,15 +1032,39 @@ class UnifiedLLMAdapter:
     # REMOVED: Shadow validate_model that differs from centralized validator
     # Use app.llm.models.validate_model instead
     
-    def get_vendor_for_model(self, model: str) -> Optional[str]:
+    def get_vendor_for_model(self, model: str) -> str:
         """
-        Infer vendor from model name (supports fully-qualified Vertex IDs)
+        Deterministically infer vendor from model name.
         
         Args:
-            model: Model identifier
+            model: Model identifier (e.g., "publishers/google/models/gemini-2.5-pro",
+                  "models/gemini-2.5-pro", "gpt-5-2025-08-07", "gemini-2.5-pro")
             
         Returns:
-            Vendor name or None if unknown
+            Vendor name ("vertex", "gemini_direct", "openai")
+            
+        Raises:
+            ValueError: If model cannot be mapped to a known vendor
         """
         if not model:
-            return None
+            raise ValueError("Model identifier is required but was empty")
+        
+        # Check for fully-qualified Vertex ID
+        if model.startswith("publishers/google/models/"):
+            return "vertex"
+        
+        # Check for OpenAI models
+        m = model.lower()
+        if m.startswith(("gpt-", "o3", "o4-mini", "o1")):
+            return "openai"
+        
+        # Handle "models/" prefix and Gemini models
+        if m.startswith("models/gemini-") or m.startswith("gemini-"):
+            # Default Gemini models to gemini_direct (deterministic, not env-dependent)
+            return "gemini_direct"
+        
+        # If we can't confidently map the model, raise an error
+        raise ValueError(
+            f"UNKNOWN_VENDOR_FOR_MODEL: Cannot determine vendor for model '{model}'. "
+            f"Please specify vendor explicitly or use a recognized model name pattern."
+        )
