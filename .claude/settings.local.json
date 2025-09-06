@@ -6,7 +6,14 @@
       "Bash(REQUIRED_RELAX_FOR_GOOGLE=true python3 test_required_centralized.py)",
       "Bash(VERTEX_LOCATION=us-central1 python3 test_vertex_health_news.py)",
       "Bash(OPENAI_PROVOKER_ENABLED=false python3 test_gpt5_health_news.py)",
-      "Bash(export OPENAI_PROVOKER_ENABLED=false)"
+      "Bash(export OPENAI_PROVOKER_ENABLED=false)",
+      "Bash(find:*)",
+      "Bash(mkdir:*)",
+      "Bash(cp:*)",
+      "Bash(rm:*)",
+      "Bash(python3:*)",
+      "Bash(OPENAI_PROVOKER_ENABLED=false python3 test_openai_als_de.py)",
+      "Bash(git add:*)"
     ],
     "deny": [],
     "ask": [],
