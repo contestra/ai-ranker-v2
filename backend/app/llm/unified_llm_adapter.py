@@ -9,14 +9,18 @@ import json
 import logging
 import os
 import time
+from collections import defaultdict
 from datetime import datetime, timedelta
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
+from urllib.parse import urlparse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.llm.types import LLMRequest, LLMResponse, ALSContext
 from app.llm.models import validate_model, normalize_model
 from app.llm.tool_detection import normalize_tool_detection, attest_two_step_vertex
 from app.llm.als_config import ALSConfig
+from app.llm.util.meta_utils import ensure_meta_aliases
+from app.llm.util.usage_utils import ensure_usage_normalized
 from app.models.models import LLMTelemetry
 from app.services.als.als_builder import ALSBuilder
 from app.core.config import get_settings
@@ -43,6 +47,137 @@ CB_FAILURE_THRESHOLD = int(os.getenv("CB_FAILURE_THRESHOLD", "3"))
 # ALS configuration
 ALS_HMAC_SECRET = os.getenv("ALS_HMAC_SECRET", "als_secret_key").encode('utf-8')
 
+# Legacy telemetry warning
+_CANON_WARN_ONCE = {"emitted": False}
+SUPPRESS_LEGACY_TELEMETRY_WARNING = os.getenv("SUPPRESS_LEGACY_TELEMETRY_WARNING", "false").lower() == "true"
+
+# Citation presentation configuration
+DEFAULT_PRESENTATION_DOMAIN_CAP = 1      # cosmetic cap for UI
+DEFAULT_PRESENTATION_MAX_CITATIONS = 8   # total shown to UI
+
+TIER1_AUTH_DOMAINS = {
+    "who.int","ema.europa.eu","pubmed.ncbi.nlm.nih.gov","nih.gov","ncbi.nlm.nih.gov",
+    "nejm.org","thelancet.com","nature.com","bmj.com",".gov",".edu"
+}
+
+
+def _read_telemetry_canonical_first(md: dict) -> dict:
+    """
+    Return a normalized telemetry view the router can rely on:
+    {tool_call_count, anchored_citations_count, unlinked_sources_count, usage, web_tool_type, response_api, used_aliases: bool}
+    """
+    used_aliases = False
+
+    def pick(*keys, default=None):
+        nonlocal used_aliases
+        for i, k in enumerate(keys):
+            if k in md and md[k] is not None:
+                # mark as alias if this wasn't the first (canonical) key
+                used_aliases = used_aliases or (i > 0)
+                return md[k]
+        return default
+
+    tool_calls = pick("tool_call_count", "web_search_count", "tool_call_count_capped", default=0)
+    anchored = pick("anchored_citations_count", "citation_count", default=0)
+    unlinked = pick("unlinked_sources_count", default=0)
+    web_tool = pick("web_tool_type", default="none")
+    resp_api = pick("response_api", default=None)
+
+    usage = md.get("usage")
+    if not usage:
+        # best-effort synthesize from common vendor fields
+        vu = md.get("vendor_usage") or {}
+        inp = int(vu.get("input_token_count", vu.get("input_tokens", 0)) or 0)
+        out = int(vu.get("output_token_count", vu.get("output_tokens", 0)) or 0)
+        usage = {"input_tokens": inp, "output_tokens": out, "total_tokens": inp + out}
+        used_aliases = True
+
+    return {
+        "tool_call_count": int(tool_calls or 0),
+        "anchored_citations_count": int(anchored or 0),
+        "unlinked_sources_count": int(unlinked or 0),
+        "web_tool_type": web_tool or "none",
+        "response_api": resp_api,
+        "usage": usage,
+        "used_aliases": used_aliases
+    }
+
+
+def _warn_once_if_legacy_used(used_aliases: bool, vendor_path: Optional[str]):
+    if used_aliases and not SUPPRESS_LEGACY_TELEMETRY_WARNING and not _CANON_WARN_ONCE["emitted"]:
+        _CANON_WARN_ONCE["emitted"] = True
+        vp = vendor_path or "unknown"
+        # one-liner, low-noise, no PII
+        logger.warning("[ROUTER] Legacy telemetry aliases used (reading canonical-first). vendor_path=%s", vp)
+
+
+def _domain_key(url: str) -> str:
+    """Extract eTLD+1 domain key for grouping citations."""
+    try:
+        host = urlparse(url).netloc.lower()
+        if not host:
+            return "unknown"
+        # eTLD+1 heuristic: keep last two labels for common TLDs; simple + safe for UI
+        parts = host.split(".")
+        return ".".join(parts[-2:]) if len(parts) >= 2 else host
+    except Exception:
+        return "unknown"
+
+
+def _is_tier1(url: str) -> bool:
+    """Check if URL is from a tier-1 authority domain."""
+    try:
+        host = urlparse(url).netloc.lower()
+        return any(host.endswith(d) for d in TIER1_AUTH_DOMAINS)
+    except Exception:
+        return False
+
+
+def present_citations_for_ui(final_citations: List[Dict[str, Any]],
+                             per_domain_cap: int = DEFAULT_PRESENTATION_DOMAIN_CAP,
+                             max_total: int = DEFAULT_PRESENTATION_MAX_CITATIONS) -> List[Dict[str, Any]]:
+    """
+    Input: adapter-level deduped citations (from P6). Output: cosmetically capped list for UI.
+    Keeps at least one official brand domain (if present) AND at least one tier-1 authority.
+    """
+    if not final_citations:
+        return []
+    
+    # 1) order: official → tier1 → others (stable within groups)
+    def rank(c):
+        url = c.get("resolved_url") or c.get("url","")
+        is_official = c.get("is_official_domain", False)
+        return (
+            0 if is_official else (1 if _is_tier1(url) else 2),
+            c.get("title") or url
+        )
+    ordered = sorted(final_citations, key=rank)
+
+    # 2) per-domain cap (cosmetic)
+    by_domain = defaultdict(list)
+    for c in ordered:
+        url = c.get("resolved_url") or c.get("url","")
+        by_domain[_domain_key(url)].append(c)
+
+    presented = []
+    for domain, items in by_domain.items():
+        presented.extend(items[:per_domain_cap])
+
+    # 3) ensure at least one official + one tier1 if available
+    if not any(c.get("is_official_domain") for c in presented):
+        # try to inject first official from ordered
+        for c in ordered:
+            if c.get("is_official_domain"):
+                presented.append(c)
+                break
+    if not any(_is_tier1(c.get("resolved_url") or c.get("url","")) for c in presented):
+        for c in ordered:
+            if _is_tier1(c.get("resolved_url") or c.get("url","")):
+                presented.append(c)
+                break
+
+    # 4) global cap for UI
+    return presented[:max_total]
 
 
 class UnifiedLLMAdapter:
@@ -310,6 +445,14 @@ class UnifiedLLMAdapter:
             pace_key = f"{vendor}:{model}"
             self._next_allowed_at[pace_key] = time.time() + retry_after
             logger.info(f"[PACING] Set next allowed time for {pace_key}: +{retry_after}s")
+    
+    def _derive_vendor_path(self, adapter_name: str) -> str:
+        """Derive vendor path for provenance tracking.
+        
+        Keep this tiny and deterministic for logs/analytics.
+        Examples: "router→openai/OpenAIAdapter", "router→vertex/VertexAdapter", "router→gemini/GeminiAdapter"
+        """
+        return f"router→{adapter_name}"
     async def complete(
         self,
         request: LLMRequest,
@@ -325,6 +468,9 @@ class UnifiedLLMAdapter:
         Returns:
             Unified LLM response
         """
+        
+        # Step 0: Normalize meta and metadata to be interchangeable
+        ensure_meta_aliases(request)
         
         # Step 1: Apply ALS if context is provided and not already in messages
         # Check if ALS is already applied using stable flag (not fragile string check)
@@ -525,6 +671,23 @@ class UnifiedLLMAdapter:
             logger.debug(f"[GROUNDING_ATTEMPT] Attempting grounded request: vendor={request.vendor}, "
                         f"model={request.model}, json_mode={getattr(request, 'json_mode', False)}")
         
+        # Determine adapter path for provenance
+        adapter_name = None
+        if request.vendor == "openai":
+            adapter_name = "openai/OpenAIAdapter"
+        elif request.vendor == "gemini_direct":
+            adapter_name = "gemini/GeminiAdapter"
+        elif request.vendor == "vertex":
+            adapter_name = "vertex/VertexAdapter"
+        else:
+            adapter_name = "unknown"
+        
+        vendor_path = self._derive_vendor_path(adapter_name)
+        grounding_mode = "grounded" if request.grounded else "ungrounded"
+        
+        # Log routing decision for observability
+        logger.debug(f"[ROUTER] Dispatching via {vendor_path} model={request.model} mode={grounding_mode}")
+        
         try:
             # Route strictly by vendor - no cross-provider fallbacks
             if request.vendor == "openai":
@@ -598,14 +761,18 @@ class UnifiedLLMAdapter:
                 logger.debug(f"[GROUNDING_UNUSED] Request was grounded but no tools were invoked")
         
         # Add router-level metadata to response
-        if not hasattr(response, 'metadata'):
+        if not hasattr(response, 'metadata') or response.metadata is None:
             response.metadata = {}
-        # Track the actual adapters used
-        try:
-            if isinstance(response.metadata, dict):
-                response.metadata.setdefault('vendor_path', vendor_path)
-        except Exception:
-            pass
+        
+        # Ensure usage is normalized for analytics (fallback if adapter didn't normalize)
+        ensure_usage_normalized(response.metadata, request.vendor)
+        
+        # Write vendor_path and mirror known fields for analytics
+        if isinstance(response.metadata, dict):
+            response.metadata['vendor_path'] = vendor_path
+            # Mirror known fields if absent, for consistency with analytics schemas
+            response.metadata.setdefault('provider_api_version', response.metadata.get('provider_api_version', None))
+            response.metadata.setdefault('response_api', response.metadata.get('response_api', None))
         
         # Add capability gating telemetry
         # Preserve adapter-level hint drops if they exist, otherwise use router-level
@@ -640,10 +807,15 @@ class UnifiedLLMAdapter:
                 # Relaxation for Google vendors if enabled
                 is_google_vendor = request.vendor in ("vertex", "gemini_direct")
                 is_openai_vendor = request.vendor == "openai"
-                tc = int((getattr(response, "metadata", {}) or {}).get("tool_call_count", 0) or 0)
-                m = response.metadata or {}
-                unlinked = int(m.get("unlinked_sources_count", (m.get("citation_count", 0) or 0) - (m.get("anchored_citations_count", 0) or 0)) or 0)
-                anchored = int(m.get("anchored_citations_count", 0) or 0)
+                
+                # Use canonical telemetry helper for consistent reading
+                md = response.metadata or {}
+                canon = _read_telemetry_canonical_first(md)
+                _warn_once_if_legacy_used(canon["used_aliases"], md.get("vendor_path"))
+                
+                tc = canon["tool_call_count"]
+                anchored = canon["anchored_citations_count"]
+                unlinked = canon["unlinked_sources_count"]
                 
                 # Google vendors: can relax with unlinked + tool calls
                 if is_google_vendor and REQUIRED_RELAX_FOR_GOOGLE and tc > 0 and unlinked > 0:
@@ -670,10 +842,13 @@ class UnifiedLLMAdapter:
             elif hasattr(response, 'citations'):
                 citations = response.citations if response.citations else []
                 
-                # Get the explicit counts from metadata
-                metadata = response.metadata if hasattr(response, 'metadata') and response.metadata else {}
-                anchored_count = metadata.get('anchored_citations_count', 0)
-                unlinked_count = metadata.get('unlinked_sources_count', 0)
+                # Use canonical telemetry helper for consistent reading
+                md = response.metadata if hasattr(response, 'metadata') and response.metadata else {}
+                canon = _read_telemetry_canonical_first(md)
+                _warn_once_if_legacy_used(canon["used_aliases"], md.get("vendor_path"))
+                
+                anchored_count = canon["anchored_citations_count"]
+                unlinked_count = canon["unlinked_sources_count"]
                 
                 # Default policy: require anchored > 0 for REQUIRED mode
                 if anchored_count == 0:
@@ -736,6 +911,20 @@ class UnifiedLLMAdapter:
         # Step 4: Emit telemetry if session provided
         if session:
             await self._emit_telemetry(request, response, session)
+        
+        # Step 5: Add citation presentation for UI (cosmetic only, no policy impact)
+        md = response.metadata or {}
+        # Prefer adapter-written canonical list; fall back to response.citations if an older path set it there
+        final_citations = md.get("citations")
+        if not final_citations and hasattr(response, "citations"):
+            final_citations = getattr(response, "citations") or []
+        
+        if final_citations:
+            # Create cosmetic UI list; do not alter the original citations
+            presented = present_citations_for_ui(final_citations)
+            md.setdefault("presentation", {})
+            md["presentation"]["citations_compact"] = presented
+            response.metadata = md
         
         return response
     

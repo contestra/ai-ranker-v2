@@ -18,6 +18,11 @@ from app.core.config import get_settings
 from app.llm.models import OPENAI_ALLOWED_MODELS, validate_model
 from app.llm.als_config import ALSConfig
 from app.llm.types import LLMRequest, LLMResponse
+from app.llm.util.meta_utils import ensure_meta_aliases, get_meta
+from app.llm.util.usage_utils import normalize_usage_openai
+from app.llm.util.citation_utils import dedupe_citations, recompute_citation_counts
+from app.llm.adapters.constants import WEB_TOOL_TYPE_NONE
+from app.llm.adapters.citation_authorities import get_all_authority_domains
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -32,6 +37,11 @@ MIN_OUTPUT_TOKENS = 16  # Responses API minimum
 OPENAI_PROVOKER_ENABLED = os.getenv("OPENAI_PROVOKER_ENABLED", "true").lower() == "true"
 OPENAI_GROUNDED_TWO_STEP = os.getenv("OPENAI_GROUNDED_TWO_STEP", "false").lower() == "true"
 OPENAI_GROUNDED_MAX_EVIDENCE = int(os.getenv("OPENAI_GROUNDED_MAX_EVIDENCE", "5"))
+
+# Tool negotiation feature flag and constants
+OPENAI_SEARCH_NEGOTIATION_ENABLED = os.getenv("OPENAI_SEARCH_NEGOTIATION_ENABLED", "true").lower() == "true"
+NEGOTIATION_FROM = "web_search"
+NEGOTIATION_TO = "web_search_preview"
 
 # TextEnvelope schema for ungrounded fallback (GPT-5 empty text quirk)
 TEXT_ENVELOPE_SCHEMA = {
@@ -69,6 +79,8 @@ class OpenAIAdapter:
     
     def _build_payload(self, request: LLMRequest, is_grounded: bool) -> Dict:
         """Build Responses API payload preserving full conversation history."""
+        meta = get_meta(request)
+        
         # Preserve full conversation history
         input_messages = []
         
@@ -133,12 +145,13 @@ class OpenAIAdapter:
             }
             
             # Honor router capabilities for reasoning hints
-            caps = request.metadata.get("capabilities", {}) if hasattr(request, 'metadata') and request.metadata else {}
-            reasoning_requested = request.meta and request.meta.get("reasoning_effort") is not None
+            caps_container = getattr(request, "metadata", None)
+            caps = caps_container.get("capabilities", {}) if isinstance(caps_container, dict) else {}
+            reasoning_requested = meta.get("reasoning_effort") is not None
             
             if caps.get("supports_reasoning_effort", False):
                 # Router says this model supports reasoning hints
-                reasoning_effort = request.meta.get("reasoning_effort", "minimal") if request.meta else "minimal"
+                reasoning_effort = meta.get("reasoning_effort", "minimal")
                 payload["reasoning"] = {"effort": reasoning_effort}
                 # Note: metadata tracking happens in complete() method, not here
             elif reasoning_requested:
@@ -147,7 +160,7 @@ class OpenAIAdapter:
                 logger.debug(f"[OPENAI] Dropped reasoning hint for non-reasoning model: {request.model}")
         
         # Add JSON schema if requested
-        json_schema = request.meta.get("json_schema") if request.meta else None
+        json_schema = meta.get("json_schema")
         if json_schema:
             schema = json_schema.get("schema", {})
             if "additionalProperties" not in schema:
@@ -168,31 +181,54 @@ class OpenAIAdapter:
         
         return payload
     
-    async def _call_with_tool_negotiation(self, payload: Dict, timeout: int) -> Tuple[Any, str]:
-        """Call Responses API with tool type negotiation for grounded."""
-        web_tool_type = "web_search"
+    async def _call_with_tool_negotiation(self, payload: Dict, timeout: int) -> Tuple[Any, str, Dict]:
+        """Call Responses API with tool type negotiation for grounded.
+        
+        Returns: (response, effective_tool_type, negotiation_metadata)
+        """
+        web_tool_type = NEGOTIATION_FROM  # Start with web_search
+        tried_negotiation = False
+        negotiation_reason = None
         
         try:
             # Try with web_search first
             response = await self.client.responses.create(**payload, timeout=timeout)
-            return response, web_tool_type
-        except Exception as e:
-            error_str = str(e)
-            lower = error_str.lower()
-            
-            # Only switch to preview if the error explicitly says web_search is unsupported
-            # Do NOT switch if preview itself is unsupported
-            if "hosted tool 'web_search' is not supported" in lower:
-                logger.info("[OAI] web_search unsupported, trying web_search_preview")
-                payload["tools"] = [{"type": "web_search_preview"}]
-                web_tool_type = "web_search_preview"
-                response = await self.client.responses.create(**payload, timeout=timeout)
-                return response, web_tool_type
-            elif "hosted tool 'web_search_preview' is not supported" in lower:
-                # Preview is explicitly unsupported - fail closed with clear error
-                logger.warning("[OAI] web_search_preview not supported for this model, failing closed")
-                raise ValueError(f"Grounding not supported for model {payload.get('model')}: {error_str}")
-            raise
+            negotiation_metadata = {
+                "web_tool_negotiation": "none",
+                "tried_negotiation": False
+            }
+            return response, web_tool_type, negotiation_metadata
+        except Exception as exc:
+            if OPENAI_SEARCH_NEGOTIATION_ENABLED:
+                needs_fallback, reason = self._oai_needs_preview_fallback_from_exc(exc)
+                if needs_fallback and not tried_negotiation:
+                    tried_negotiation = True
+                    negotiation_reason = reason or "structured_or_message_match"
+                    
+                    # Log the negotiation
+                    logger.info(f"[OPENAI] tool negotiation: {NEGOTIATION_FROM}→{NEGOTIATION_TO} reason={negotiation_reason}")
+                    
+                    # Retry with web_search_preview
+                    payload["tools"] = [{"type": NEGOTIATION_TO}]
+                    web_tool_type = NEGOTIATION_TO
+                    response = await self.client.responses.create(**payload, timeout=timeout)
+                    
+                    negotiation_metadata = {
+                        "web_tool_negotiation": f"{NEGOTIATION_FROM}→{NEGOTIATION_TO}",
+                        "web_tool_negotiation_reason": negotiation_reason,
+                        "tried_negotiation": True
+                    }
+                    return response, web_tool_type, negotiation_metadata
+                else:
+                    # Check if preview itself is unsupported
+                    error_str = str(exc).lower()
+                    if "hosted tool 'web_search_preview' is not supported" in error_str:
+                        logger.warning(f"[OAI] web_search_preview not supported for model {payload.get('model')}, failing closed")
+                        raise ValueError(f"Grounding not supported for model {payload.get('model')}: {exc}")
+                    raise
+            else:
+                # Negotiation disabled - re-raise original exception
+                raise
     
     def _extract_content(self, response: Any, is_grounded: bool = False) -> Tuple[str, str]:
         """Extract text content from response.
@@ -329,7 +365,8 @@ class OpenAIAdapter:
                                     'url': url,
                                     'title': title[:200] if title else '',
                                     'domain': domain,
-                                    'source_type': citation_type
+                                    'source_type': citation_type,
+                                    'type': 'anchored'  # OpenAI citations always have URLs
                                 })
                                 
                                 # Limit to top 10 citations
@@ -391,7 +428,8 @@ class OpenAIAdapter:
                                                 'url': url,
                                                 'title': title[:200] if title else '',
                                                 'domain': domain,
-                                                'source_type': 'url_annotation'
+                                                'source_type': 'url_annotation',
+                                                'type': 'anchored'  # Has URL
                                             })
                                             
                                             # Still limit to 10 total
@@ -406,6 +444,49 @@ class OpenAIAdapter:
     def _extract_citations(self, response: Any) -> Tuple[List[Dict[str, Any]], int, int]:
         """Legacy wrapper for citation extraction - delegates to new method."""
         return self._extract_openai_citations(response, source_type="web_search_result")
+    
+    def _oai_needs_preview_fallback_from_exc(self, exc) -> tuple[bool, str]:
+        """
+        Return (needs_fallback, reason). Prefer structured fields from the SDK/HTTP response.
+        Fallback to message substrings only if structured fields are missing.
+        """
+        # Try structured attributes the SDK often exposes
+        status = getattr(exc, "status", None) or getattr(exc, "http_status", None)
+        data = getattr(exc, "response", None) or getattr(exc, "error", None)
+        
+        # Some SDKs attach a dict under .response or .error
+        err_obj = None
+        if isinstance(data, dict):
+            err_obj = data.get("error") or data
+        
+        err_type = (err_obj or {}).get("type") if err_obj else None
+        err_code = (err_obj or {}).get("code") if err_obj else None
+        err_msg = ((err_obj or {}).get("message") if err_obj else None) or str(exc)
+        
+        # Heuristics: hosted tool unsupported for this account/model
+        structured_hit = (
+            status in (400, 404) and
+            (err_type in ("invalid_request_error", "unsupported_feature", "parameter_error", None)) and
+            (
+                (err_code and "tool" in str(err_code).lower()) or
+                ("web_search" in (err_msg or "").lower() and "not support" in err_msg.lower())
+            )
+        )
+        if structured_hit:
+            return True, f"{status or 'NA'}:{err_type or 'NA'}:{err_code or 'NA'}"
+        
+        # Last-resort substrings
+        msg = (str(exc) or "").lower()
+        substr_hits = [
+            "hosted tool 'web_search' is not supported",
+            "unsupported tool type: web_search",
+            "unknown tool: web_search",
+            "tools not enabled for this model"
+        ]
+        if any(s in msg for s in substr_hits):
+            return True, "message_match"
+        
+        return False, ""
     
     def _standardize_finish_reason(self, reason: str) -> str:
         """Standardize finish reasons for cross-vendor comparison.
@@ -441,6 +522,10 @@ class OpenAIAdapter:
         """Complete request using Responses API only."""
         start_time = time.perf_counter()
         
+        # Normalize meta and metadata to be interchangeable
+        ensure_meta_aliases(request)
+        meta = get_meta(request)
+        
         # Validate model
         ok, msg = validate_model("openai", request.model)
         if not ok:
@@ -461,7 +546,7 @@ class OpenAIAdapter:
         ALSConfig.mark_als_metadata(metadata, seed_key_id, "openai")
         
         is_grounded = request.grounded
-        grounding_mode = request.meta.get("grounding_mode", "AUTO") if request.meta and is_grounded else None
+        grounding_mode = meta.get("grounding_mode", "AUTO") if is_grounded else None
         
         try:
             # Build payload
@@ -471,8 +556,9 @@ class OpenAIAdapter:
                 metadata["mapped_model"] = effective_model
             
             # Track reasoning hints in metadata (was attempted in _build_payload but metadata not available there)
-            caps = request.metadata.get("capabilities", {}) if hasattr(request, 'metadata') and request.metadata else {}
-            reasoning_requested = request.meta and request.meta.get("reasoning_effort") is not None
+            caps_container = getattr(request, "metadata", None)
+            caps = caps_container.get("capabilities", {}) if isinstance(caps_container, dict) else {}
+            reasoning_requested = meta.get("reasoning_effort") is not None
             
             if caps.get("supports_reasoning_effort", False) and "reasoning" in payload:
                 metadata["reasoning_effort_applied"] = payload["reasoning"].get("effort", "minimal")
@@ -483,12 +569,20 @@ class OpenAIAdapter:
             # Make API call
             if is_grounded:
                 # Grounded: negotiate tool type
-                response, web_tool_type = await self._call_with_tool_negotiation(payload, timeout)
-                # Always track both initial and final tool types
-                metadata["web_tool_type_initial"] = "web_search"  # Always starts with web_search
+                response, web_tool_type, negotiation_metadata = await self._call_with_tool_negotiation(payload, timeout)
+                
+                # Add negotiation breadcrumbs to metadata
+                metadata["web_tool_type_initial"] = NEGOTIATION_FROM  # Always starts with web_search
                 metadata["web_tool_type_final"] = web_tool_type
                 metadata["web_tool_type"] = web_tool_type  # Keep for backward compatibility
-                if web_tool_type != "web_search":
+                
+                # Add negotiation metadata
+                metadata["web_tool_negotiation"] = negotiation_metadata.get("web_tool_negotiation", "none")
+                if negotiation_metadata.get("web_tool_negotiation_reason"):
+                    metadata["web_tool_negotiation_reason"] = negotiation_metadata["web_tool_negotiation_reason"]
+                
+                # Legacy flag for backward compatibility
+                if negotiation_metadata.get("tried_negotiation"):
                     metadata["web_tool_type_negotiated"] = True
                 
                 # Extract tool evidence
@@ -546,11 +640,40 @@ class OpenAIAdapter:
                 metadata["why_not_grounded"] = None  # Grounded was requested
                 content, source = self._extract_content(response, is_grounded=True)
                 metadata["fallback_used"] = False
-                # Extract citations from web search results
-                citations, anchored_count, unlinked_count = self._extract_citations(response)
-                metadata["citation_count"] = len(citations)
+                # Extract raw citations from web search results
+                raw_citations, raw_anchored, raw_unlinked = self._extract_citations(response)
+                
+                # Apply citation deduplication
+                authority_domains = get_all_authority_domains()
+                # Get official domains from request if available (future enhancement)
+                official_domains = set()
+                if hasattr(request, 'metadata') and request.metadata:
+                    official_domains = request.metadata.get('official_domains', set())
+                
+                # Deduplicate citations
+                citations = dedupe_citations(
+                    raw_citations,
+                    official_domains=official_domains,
+                    authority_domains=authority_domains,
+                    per_domain_cap=2
+                )
+                
+                # Recompute counts after deduplication
+                anchored_count, unlinked_count = recompute_citation_counts(citations)
+                
+                # Set both canonical and legacy fields
+                metadata["citation_count"] = len(citations)  # Legacy field for BC
                 metadata["anchored_citations_count"] = anchored_count
                 metadata["unlinked_sources_count"] = unlinked_count
+                
+                # Add deduplication telemetry
+                if raw_citations and len(raw_citations) != len(citations):
+                    metadata["citation_dedup_applied"] = True
+                    metadata["citations_raw_count"] = len(raw_citations)
+                    metadata["citations_deduped_count"] = len(citations)
+                
+                # NEW (P8a): persist the final, deduped list for router/UI presentation
+                metadata["citations"] = citations or []
                 
                 # If we have anchored citations but no tool calls, still mark as grounded
                 if anchored_count > 0 and metadata["tool_call_count"] == 0:
@@ -709,18 +832,22 @@ class OpenAIAdapter:
             # REQUIRED mode enforcement removed - now handled centrally in router
             # Adapter only reports the facts: tool_call_count, citations, etc.
             
-            # Extract usage
-            usage = {}
+            # Extract usage and normalize
+            usage_raw = {}
             if hasattr(response, 'usage'):
                 usage_obj = response.usage
-                usage = {
+                # Collect all raw usage fields
+                usage_raw = {
                     "prompt_tokens": getattr(usage_obj, 'input_tokens', 0),
                     "completion_tokens": getattr(usage_obj, 'output_tokens', 0),
                     "reasoning_tokens": getattr(usage_obj, 'reasoning_tokens', 0),
                     "total_tokens": getattr(usage_obj, 'total_tokens', 0)
                 }
-                # Also store in metadata for telemetry parity
-                metadata["usage"] = usage
+                
+                # Normalize usage for consistent analytics
+                normalized_usage, vendor_usage = normalize_usage_openai(usage_raw)
+                metadata["usage"] = normalized_usage
+                metadata["vendor_usage"] = vendor_usage
             
             # Extract finish_reason for telemetry parity with Google adapters
             # Harmonized with Google path for cross-vendor comparisons
@@ -771,12 +898,43 @@ class OpenAIAdapter:
             latency_ms = int((time.perf_counter() - start_time) * 1000)
             metadata["latency_ms"] = latency_ms
             
+            # Ensure canonical telemetry keys are set (keep legacy aliases)
+            # These are already set above but ensure consistency
+            metadata.setdefault("tool_call_count", tool_count if is_grounded else 0)
+            metadata.setdefault("anchored_citations_count", anchored_count if is_grounded else 0)
+            metadata.setdefault("unlinked_sources_count", unlinked_count if is_grounded else 0)
+            
+            # Set canonical web_tool_type
+            if is_grounded:
+                # Map the negotiated tool type to canonical value
+                if web_tool_type == "web_search":
+                    metadata["web_tool_type"] = "web_search"
+                elif web_tool_type == "web_search_preview":
+                    metadata["web_tool_type"] = "web_search_preview"
+                else:
+                    metadata["web_tool_type"] = WEB_TOOL_TYPE_NONE
+            else:
+                metadata["web_tool_type"] = WEB_TOOL_TYPE_NONE
+            
+            
+            # Debug logging for telemetry
+            usage_info = metadata.get("usage", {})
+            logger.debug(
+                f"[ADAPTER:openai] tool_call_count={metadata.get('tool_call_count', 0)} "
+                f"anchored={metadata.get('anchored_citations_count', 0)} "
+                f"unlinked={metadata.get('unlinked_sources_count', 0)} "
+                f"web_tool_type={metadata.get('web_tool_type', 'none')} "
+                f"usage={{input:{usage_info.get('input_tokens', 0)}, "
+                f"output:{usage_info.get('output_tokens', 0)}, "
+                f"total:{usage_info.get('total_tokens', 0)}}}"
+            )
+            
             return LLMResponse(
                 content=content,
                 model_version=effective_model,
                 model_fingerprint=None,
                 grounded_effective=metadata.get("grounded_evidence_present", False),
-                usage=usage,
+                usage=metadata.get("vendor_usage", {}),
                 latency_ms=latency_ms,
                 raw_response=None,
                 success=True,

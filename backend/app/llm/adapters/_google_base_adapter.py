@@ -25,6 +25,11 @@ from google.genai.types import (
 # GroundingRequiredFailedError removed - REQUIRED enforcement now in router only
 from app.llm.types import LLMRequest, LLMResponse
 from app.llm.models import validate_model
+from app.llm.util.meta_utils import ensure_meta_aliases, get_meta
+from app.llm.util.usage_utils import normalize_usage_google
+from app.llm.util.citation_utils import dedupe_citations, recompute_citation_counts
+from app.llm.adapters.constants import WEB_TOOL_TYPE_NONE
+from app.llm.adapters.citation_authorities import get_all_authority_domains
 
 logger = logging.getLogger(__name__)
 
@@ -205,6 +210,8 @@ def _extract_citations_from_grounding(response) -> Tuple[List[Dict[str, Any]], i
                 "title": (title or "")[:200],
                 "source_type": "grounding_chunk",
                 "domain": domain,
+                "type": "unlinked",  # Google grounding chunks are unlinked evidence
+                "resolved_url": resolved
             }
             if original and original != resolved:
                 rec["original_url"] = uri
@@ -243,6 +250,10 @@ class GoogleBaseAdapter:
     async def complete(self, request: LLMRequest, timeout: int = 60) -> LLMResponse:
         start = time.perf_counter()
         request_id = f"req_{int(time.time()*1000)}"
+        
+        # Normalize meta and metadata to be interchangeable
+        ensure_meta_aliases(request)
+        meta = get_meta(request)
 
         # Validate & normalize model
         model_for_validation = self._normalize_for_validation(request.model)
@@ -264,7 +275,8 @@ class GoogleBaseAdapter:
             metadata["region"] = reg
 
         # Capabilities from router
-        caps = request.metadata.get("capabilities", {}) if hasattr(request, "metadata") else {}
+        caps_container = getattr(request, "metadata", None)
+        caps = caps_container.get("capabilities", {}) if isinstance(caps_container, dict) else {}
 
         # Messages → system + history
         system_instruction, conversation = _extract_system_and_user_messages(request.messages)
@@ -283,16 +295,14 @@ class GoogleBaseAdapter:
 
         # Thinking config
         thinking_config = None
-        thinking_requested = (hasattr(request, "meta") and request.meta and 
-                             (request.meta.get("thinking_budget") is not None or 
-                              request.meta.get("include_thoughts") is not None))
+        thinking_requested = (meta.get("thinking_budget") is not None or 
+                             meta.get("include_thoughts") is not None)
         
         if caps.get("supports_thinking_budget", False):
-            thinking_budget = request.metadata.get("thinking_budget_tokens") if hasattr(request, "metadata") else None
+            thinking_budget = caps_container.get("thinking_budget_tokens") if isinstance(caps_container, dict) else None
             include_thoughts = False
             if caps.get("include_thoughts_allowed", False):
-                if hasattr(request, "meta") and request.meta:
-                    include_thoughts = request.meta.get("include_thoughts", False)
+                include_thoughts = meta.get("include_thoughts", False)
             if thinking_budget is not None:
                 thinking_config = ThinkingConfig(thinking_budget=thinking_budget, include_thoughts=include_thoughts)
                 metadata["thinking_budget_tokens"] = thinking_budget
@@ -315,16 +325,14 @@ class GoogleBaseAdapter:
 
         # JSON schema wiring (if any)
         json_schema_requested = False
-        json_schema = None
-        if hasattr(request, "meta") and request.meta and request.meta.get("json_schema"):
-            json_schema = request.meta["json_schema"]
-            if "schema" in json_schema:
-                json_schema_requested = True
+        json_schema = meta.get("json_schema")
+        if json_schema and "schema" in json_schema:
+            json_schema_requested = True
 
         # Grounding mode
         grounding_mode = None
         if request.grounded:
-            grounding_mode = request.meta.get("grounding_mode", "AUTO") if hasattr(request, "meta") and request.meta else "AUTO"
+            grounding_mode = meta.get("grounding_mode", "AUTO")
             metadata["grounding_mode_requested"] = grounding_mode
 
         # Configure tools / modes
@@ -397,9 +405,38 @@ class GoogleBaseAdapter:
             tool_call_count = 0
 
             if request.grounded:
-                citations, anchored_count, unlinked_count, queries = _extract_citations_from_grounding(response)
+                raw_citations, raw_anchored, raw_unlinked, queries = _extract_citations_from_grounding(response)
+                
+                # Apply citation deduplication
+                authority_domains = get_all_authority_domains()
+                # Get official domains from request if available
+                official_domains = set()
+                if hasattr(request, 'metadata') and request.metadata:
+                    official_domains = request.metadata.get('official_domains', set())
+                
+                # Deduplicate citations
+                citations = dedupe_citations(
+                    raw_citations,
+                    official_domains=official_domains,
+                    authority_domains=authority_domains,
+                    per_domain_cap=2
+                )
+                
+                # Recompute counts after deduplication
+                anchored_count, unlinked_count = recompute_citation_counts(citations)
+                
                 metadata["anchored_citations_count"] = anchored_count
                 metadata["unlinked_sources_count"] = unlinked_count
+                
+                # Add deduplication telemetry
+                if raw_citations and len(raw_citations) != len(citations):
+                    metadata["citation_dedup_applied"] = True
+                    metadata["citations_raw_count"] = len(raw_citations)
+                    metadata["citations_deduped_count"] = len(citations)
+                
+                # NEW (P8a): write final deduped list into metadata for router/UI use
+                metadata["citations"] = citations or []
+                
                 if queries:
                     metadata["search_queries"] = queries[:10]
 
@@ -470,20 +507,20 @@ class GoogleBaseAdapter:
                 metadata["web_search_signal_count"] = 0
 
             # Usage & finish reason
-            usage = {}
             if hasattr(response, "usage_metadata"):
                 um = response.usage_metadata
-                usage = {
-                    "prompt_tokens": getattr(um, "prompt_token_count", 0),
-                    "completion_tokens": getattr(um, "candidates_token_count", 0),
-                    "total_tokens": getattr(um, "total_token_count", 0),
-                }
-                metadata["usage"] = {
+                # Collect raw usage data
+                usage_raw = {
                     "thoughts_token_count": getattr(um, "thoughts_token_count", None),
                     "input_token_count": getattr(um, "prompt_token_count", 0),
                     "output_token_count": getattr(um, "candidates_token_count", 0),
                     "total_token_count": getattr(um, "total_token_count", 0),
                 }
+                
+                # Normalize usage for consistent analytics
+                normalized_usage, vendor_usage = normalize_usage_google(usage_raw)
+                metadata["usage"] = normalized_usage
+                metadata["vendor_usage"] = vendor_usage
 
             # Extract finish_reason - harmonized with OpenAI adapter
             finish_reason = None
@@ -534,12 +571,38 @@ class GoogleBaseAdapter:
             latency_ms = int((time.perf_counter() - start) * 1000)
             metadata["latency_ms"] = latency_ms
 
+            # Ensure canonical telemetry keys are set (keep legacy aliases)
+            # tool_call_count, anchored_citations_count, unlinked_sources_count already set above
+            # Just ensure they have defaults if missing
+            metadata.setdefault("tool_call_count", metadata.get("tool_call_count", 0))
+            metadata.setdefault("anchored_citations_count", metadata.get("anchored_citations_count", 0))
+            metadata.setdefault("unlinked_sources_count", metadata.get("unlinked_sources_count", 0))
+            
+            # Set canonical web_tool_type
+            if request.grounded and metadata.get("web_tool_type") in ["google_search", "GoogleSearch"]:
+                metadata["web_tool_type"] = "google_search"
+            elif not request.grounded or not metadata.get("tool_call_count", 0):
+                metadata["web_tool_type"] = WEB_TOOL_TYPE_NONE
+            # else keep whatever was already set
+            
+            # Debug logging for telemetry
+            usage_info = metadata.get("usage", {})
+            logger.debug(
+                f"[ADAPTER:{self._vendor_key()}] tool_call_count={metadata.get('tool_call_count', 0)} "
+                f"anchored={metadata.get('anchored_citations_count', 0)} "
+                f"unlinked={metadata.get('unlinked_sources_count', 0)} "
+                f"web_tool_type={metadata.get('web_tool_type', 'none')} "
+                f"usage={{input:{usage_info.get('input_tokens', 0)}, "
+                f"output:{usage_info.get('output_tokens', 0)}, "
+                f"total:{usage_info.get('total_tokens', 0)}}}"
+            )
+
             return LLMResponse(
                 content=content,
                 model_version=model_for_validation,
                 model_fingerprint=None,
                 grounded_effective=grounded_effective,
-                usage=usage,
+                usage=metadata.get("vendor_usage", {}),
                 latency_ms=latency_ms,
                 raw_response=None,
                 success=True,
